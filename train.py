@@ -34,7 +34,7 @@ def main():
 
     s = time.strftime("%m%d%H%M", time.localtime())
     filename = f"weight_{s}.pth"
-    weight_path = os.path.join(base_path, "weights", filename)
+    weight_path = os.path.join(base_path, "weight", filename)
 
     #dataloader
     ds = SwingDataset(
@@ -192,7 +192,7 @@ def main():
     plt.gca().xaxis.set_major_locator(MaxNLocator(integer=True))
     plt.xlim(1,epoch+1)
     plt.xlabel("Epoch"),plt.ylabel("Loss")
-    plt.savefig(os.path.join(result_path, "result", "Loss_curve"))
+    plt.savefig(os.path.join(result_path, "Loss_curve"))
 
     # plot the accuracy curve for training and validation
     pd.DataFrame({
@@ -202,7 +202,7 @@ def main():
     plt.gca().xaxis.set_major_locator(MaxNLocator(integer=True))
     plt.xlim(1,epoch+1)
     plt.xlabel("Epoch"),plt.ylabel("Accuracy")
-    plt.savefig(os.path.join(result_path, "result", "Training_accuracy"))
+    plt.savefig(os.path.join(result_path, "Training_accuracy"))
     
     
 if __name__ == "__main__":
