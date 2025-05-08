@@ -5,9 +5,10 @@
 ## 嘗試過的方法
 
 ## 一些酷發現
-![](img\Figure_1.png)
-![](img\Figure_2.png)
+
+![Figure_1](assets/Figure_1.png)
+![Figure_2](assets/Figure_2.png)
 部分訓練集揮拍數據的起始會有不動的數據
 
-![](img\Figure_3.png)
+![Figure_3](assets/Figure_3.png)
 部分訓練集揮拍數據長處異常的短或異常的長
