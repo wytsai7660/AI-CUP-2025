@@ -2,7 +2,7 @@ import os
 import torch
 import pandas as pd
 from torch.utils.data import Dataset, DataLoader
-from cut import segment_file  # 你原本提供的切段函式
+from helper.cut import segment_file  # 你原本提供的切段函式
 
 class SwingDataset(Dataset):
     """
