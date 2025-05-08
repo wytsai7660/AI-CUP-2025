@@ -4,6 +4,8 @@
 
 ## 嘗試過的方法
 
+- 使用 random forest 預測持拍手，透過技巧單獨測量，在官方 public leader 已可達 0.996
+
 ## 一些酷發現
 
 ![Figure_1](assets/Figure_1.png)
