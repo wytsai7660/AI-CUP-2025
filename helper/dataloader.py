@@ -51,7 +51,7 @@ class TrajectoryDataset(Dataset):
             self.meta_dict[uid] = torch.cat([g, h, y, l], dim=0)
 
         self.samples = []  # list of (file_path, start_idx, end_idx, unique_id)
-        for fpath in data_dir.iterdir():
+        for fpath in sorted(data_dir.iterdir()):
             # print("processing:", fpath)
             uid = int(fpath.stem)  # FIXME: to be removed?
             _, segs = segment_file(fpath, **self.seg_args)
