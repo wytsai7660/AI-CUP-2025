@@ -1,8 +1,9 @@
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, random_split
+from config import TRAIN_DATA_DIR, TRAIN_INFO
 from model import EncoderOnlyClassifier
-from helper.dataloader import SwingDataset, collate_fn_torch
+from helper.dataloader import TrajectoryDataset, collate_fn_torch
 
 import os
 import copy
@@ -28,8 +29,8 @@ def main():
 
     # data path and weight path
     base_path = os.path.dirname(os.path.abspath(__file__))
-    train_data_path = os.path.join(base_path, "39_Training_Dataset", "train_data") 
-    label_data_path = os.path.join(base_path, "39_Training_Dataset", "train_info.csv")
+    train_data_path = TRAIN_DATA_DIR
+    label_data_path = TRAIN_INFO
     result_path = os.path.join(base_path, "result")
 
     s = time.strftime("%m%d%H%M", time.localtime())
@@ -37,14 +38,14 @@ def main():
     weight_path = os.path.join(base_path, "weight", filename)
 
     #dataloader
-    ds = SwingDataset(
+    ds = TrajectoryDataset(
             data_dir=train_data_path,
             info_csv=label_data_path,
             smooth_w=5,
             perc=75,
             dist_frac=0.3,
-            min_len=20,
-            max_len=500,
+            min_duration=20,
+            max_duration=500,
             transform=normalize
         ) 
     total_len = len(ds)
