@@ -16,12 +16,18 @@ for path in [TRAIN_DATA_DIR, TRAIN_INFO, TEST_DATA_DIR, TEST_INFO]:
     if not path.exists():
         sys.exit(f"{path}: No such file or directory")
 
-# ===== Constants =====
-POSSIBLE_VALUES = {
-    "gender": [1, 2],
-    "hand": [1, 2],
-    "years": [0, 1, 2],
-    "level": [2, 3, 4, 5],
-}
 
-print("OK")  # TODO: remove
+# ===== Constants =====
+FIELDS = [
+    "gender",
+    "hold racket handed",
+    "play years",
+    "level",
+]
+
+POSSIBLE_VALUES = [
+    [1, 2],
+    [1, 2],
+    [0, 1, 2],
+    [2, 3, 4, 5],
+]
