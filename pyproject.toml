@@ -10,4 +10,5 @@ dependencies = [
     "pandas>=2.2.3",
     "scikit-learn>=1.6.1",
     "torch>=2.7.0",
+    "tqdm>=4.67.1",
 ]

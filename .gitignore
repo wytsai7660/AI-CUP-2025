@@ -175,5 +175,8 @@ cython_debug/
 
 data/
 alan/out/
+alan/exp/submissions/
+alan/exp/temp_configs/
+alan/exp/wandb/
 
 39_*_Dataset/
