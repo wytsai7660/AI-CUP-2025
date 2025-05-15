@@ -183,3 +183,5 @@ alan/exp/wandb/
 tempCodeRunnerFile*
 Loss_curve.png
 Training_accuracy.png
+
+.vscode/
