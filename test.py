@@ -8,7 +8,7 @@ from tqdm import tqdm
 
 # ─── 在這裡直接定義變數 ────────────────────────────────────────────
 TEST_DIR    = "39_Test_Dataset/test_data"       # 測試資料夾路徑
-WEIGHT_PATH = "weight/weight_05082319.pth"      # 訓練好權重的 .pth 檔
+WEIGHT_PATH = "weight/weight_05112337.pth"      # 訓練好權重的 .pth 檔
 OUTPUT_CSV  = "test_results.csv"                # 輸出 CSV 檔名
 # ───────────────────────────────────────────────────────────────────
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
@@ -21,7 +21,7 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # 1) 建立並載入模型
-    model = EncoderOnlyClassifier(d_model=6, n_enc=3, dim_ff=512).to(device)
+    model = EncoderOnlyClassifier(d_model=6, n_enc=8, dim_ff=2048).to(device)
     state = torch.load(WEIGHT_PATH, map_location=device)
     model.load_state_dict(state)
     model.eval()

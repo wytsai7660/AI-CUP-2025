@@ -21,10 +21,10 @@ def normalize(x):
 def main():
 # training parameters
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-    epochs = 20
+    epochs = 30
     learning_rate = 0.0001
-    train_bathch_size = 32
-    valid_batch_size = 32
+    train_bathch_size = 8
+    valid_batch_size = 16
 
     # data path and weight path
     base_path = os.path.dirname(os.path.abspath(__file__))
@@ -74,7 +74,7 @@ def main():
         drop_last=True  
     )
     # model
-    model = EncoderOnlyClassifier(d_model=6, n_enc=3, dim_ff=512)
+    model = EncoderOnlyClassifier(d_model=6, n_enc=8, dim_ff=2048)
     model = model.to(device)
 
     # set optimizer and loss function
@@ -91,7 +91,7 @@ def main():
     best = 100
     best_model_wts = copy.deepcopy(model.state_dict())
 
-    patience = 8
+    patience = 5
     no_improve = 0
     
     # for batch in train_loader:
