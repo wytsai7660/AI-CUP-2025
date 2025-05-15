@@ -21,7 +21,7 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # 1) 建立並載入模型
-    model = EncoderOnlyClassifier(d_model=6, n_enc=8, dim_ff=2048).to(device)
+    model = EncoderOnlyClassifier(d_model=6, n_enc=6, dim_ff=512).to(device)
     state = torch.load(WEIGHT_PATH, map_location=device)
     model.load_state_dict(state)
     model.eval()

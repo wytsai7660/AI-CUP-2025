@@ -4,6 +4,7 @@ from torch.utils.data import DataLoader, random_split
 from config import TRAIN_DATA_DIR, TRAIN_INFO
 from model import EncoderOnlyClassifier
 from helper.dataloader import TrajectoryDataset, collate_fn_torch
+from Focal_Loss import class_weights
 
 import os
 import copy
@@ -16,21 +17,23 @@ import time
 import multiprocessing
 
 import os
+
+FOCAL_LOSS_GAMMA = 2.0
+
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 def normalize(x):
-    return (x - x.mean(dim=0)) / (x.std(dim=0) + 1e-6)
+    return (x - x.mean(dim=0)) / (x.std(dim=0) + 1e-6)    
+    
 def main():
 # training parameters
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
     epochs = 30
     learning_rate = 0.0001
-    train_bathch_size = 8
+    train_bathch_size = 16
     valid_batch_size = 16
 
     # data path and weight path
     base_path = os.path.dirname(os.path.abspath(__file__))
-    train_data_path = TRAIN_DATA_DIR
-    label_data_path = TRAIN_INFO
     result_path = os.path.join(base_path, "result")
 
     s = time.strftime("%m%d%H%M", time.localtime())
@@ -39,15 +42,15 @@ def main():
 
     #dataloader
     ds = TrajectoryDataset(
-            data_dir=train_data_path,
-            info_csv=label_data_path,
-            smooth_w=5,
-            perc=75,
-            dist_frac=0.3,
-            min_duration=20,
-            max_duration=500,
-            transform=normalize
-        ) 
+        data_dir=TRAIN_DATA_DIR,
+        info_csv=TRAIN_INFO,
+        smooth_w=5,
+        perc=75,
+        dist_frac=0.3,
+        min_duration=20,
+        max_duration=500,
+        transform=normalize
+    ) 
     total_len = len(ds)
     train_len = int(0.8 * total_len)
     valid_len = total_len - train_len
@@ -75,13 +78,20 @@ def main():
         drop_last=True  
     )
     # model
-    model = EncoderOnlyClassifier(d_model=6, n_enc=8, dim_ff=2048)
+    model = EncoderOnlyClassifier(d_model=6, n_enc=6, dim_ff=256)
     model = model.to(device)
 
     # set optimizer and loss function
-
-    criterion = torch.nn.CrossEntropyLoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, )
+    # class_weights = class_weights(label_data_path, device)
+    # criterion = torch.hub.load(
+    #     "adeelh/pytorch-multi-class-focal-loss",
+    #     model="FocalLoss",
+    #     alpha=class_weights.to(device),   # 每类权重
+    #     gamma=FOCAL_LOSS_GAMMA,            # 焦点参数
+    #     reduction="mean",
+    # )
+    criterion = nn.CrossEntropyLoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate,weight_decay=1e-5)
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=7, gamma=0.1)
 
     # train
