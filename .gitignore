@@ -180,3 +180,6 @@ alan/exp/temp_configs/
 alan/exp/wandb/
 
 39_*_Dataset/
+tempCodeRunnerFile*
+Loss_curve.png
+Training_accuracy.png
