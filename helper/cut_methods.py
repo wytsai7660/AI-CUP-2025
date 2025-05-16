@@ -6,6 +6,7 @@ from scipy.ndimage import uniform_filter1d
 from scipy.signal import find_peaks
 from abc import ABC, abstractmethod
 import re
+from config import TRAIN_DATA_DIR, TEST_DATA_DIR, TRAIN_INFO, TEST_INFO
 """
 Methods to 'cut' dataset
 """
@@ -31,11 +32,19 @@ class cut_by_default(cut_method):
                          sep=r'\s+',
                          header=None,
                          names=['ax', 'ay', 'az', 'gx', 'gy', 'gz'])
+        csv_path = file_path.parents[1]
+        if csv_path == TEST_DATA_DIR.parent:
+            csv_path = TEST_INFO
+        elif csv_path == TRAIN_DATA_DIR.parent:
+            csv_path = TRAIN_INFO
+        else:
+            raise ValueError('File path should in [test, train].')
         unique_id = int(file_path.stem)
         pattern = re.compile(r'\d+')
-        data = pd.read_csv('39_Test_Dataset/test_info.csv')
-        item = data.groupby('unique_id').get_group(unique_id).to_numpy()[0]
-        cut = np.array(list(map(int, re.findall(pattern, item[-1]))))
+        data = pd.read_csv(csv_path)
+        item = data.groupby(by=['unique_id']).get_group(
+            (unique_id, )).to_numpy()
+        cut = np.array(list(map(int, re.findall(pattern, item[0][-1]))))
         segs, start = [], 0
         for b in cut:
             segs.append((start, b))

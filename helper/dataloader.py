@@ -34,39 +34,40 @@ class TrajectoryDataset(Dataset):
         dist_frac: float = 0.3,
         min_duration: int = -INF,
         max_duration: int = INF,
-        cut_method: Callable[..., tuple[pd.DataFrame, list]] = cut_by_default(),
+        cut_method: Callable[..., tuple[pd.DataFrame,
+                                        list]] = cut_by_default(),
         transform: Callable[[torch.Tensor], torch.Tensor] | None = None,
     ):
         self.transform = transform
         self.seg_args = dict(
-            smooth_w=smooth_w, perc=perc, dist_frac=dist_frac
-        )  # TODO: isolate the segmenting logic
+            smooth_w=smooth_w, perc=perc,
+            dist_frac=dist_frac)  # TODO: isolate the segmenting logic
 
         df_to_encode = dataframe[PREDICTING_FIELDS]
-        encoder = OneHotEncoder(categories=POSSIBLE_VALUES, sparse_output=False)
-        metas = torch.tensor(encoder.fit_transform(df_to_encode), dtype=torch.float32)
+        encoder = OneHotEncoder(categories=POSSIBLE_VALUES,
+                                sparse_output=False)
+        metas = torch.tensor(encoder.fit_transform(df_to_encode),
+                             dtype=torch.float32)
 
         # print(metas.shape)
         # print(metas)
 
         self.samples: List[Tuple[torch.Tensor, torch.Tensor]] = []
         fpaths = [
-            data_dir / f"{unique_id}.txt" for unique_id in dataframe["unique_id"].values
+            data_dir / f"{unique_id}.txt"
+            for unique_id in dataframe["unique_id"].values
         ]
         for fpath, meta in zip(fpaths, metas):
             # print(fpath)
-            data = torch.tensor(
-                pd.read_csv(fpath, sep=r"\s+", header=None).values, dtype=torch.float32
-            )
-            # FIXME: cut_method seems to have some bug, temporarily disable it and use segment_file directly
-            # TODO: uncomment the following line and remove the next line when cut_method is fixed
-            # _, segs = cut_method(fpath)
-            _, segs = segment_file(fpath, **self.seg_args)
+            data = torch.tensor(pd.read_csv(fpath, sep=r"\s+",
+                                            header=None).values,
+                                dtype=torch.float32)
+            _, segs = cut_method(fpath)
             for st, ed in segs:
                 duration = ed - st + 1
                 if duration < min_duration or duration > max_duration:
                     continue
-                self.samples.append((data[st : ed + 1, :], meta))
+                self.samples.append((data[st:ed + 1, :], meta))
 
     def __len__(self):
         return len(self.samples)
@@ -88,7 +89,8 @@ def collate_fn_torch(batch: List[Tuple[torch.Tensor, torch.Tensor]]):
     """
     segments, metas = zip(*batch)
     lengths = torch.tensor([s.size(0) for s in segments], dtype=torch.long)
-    padded = torch.nn.utils.rnn.pad_sequence(segments, batch_first=True)  # type: ignore
+    padded = torch.nn.utils.rnn.pad_sequence(segments,
+                                             batch_first=True)  # type: ignore
     metas = torch.stack(metas, dim=0)
     return padded, lengths, metas
 
@@ -156,11 +158,9 @@ def get_train_valid_dataloader(
     # print(f"test count: {dict(count)}")
 
     train_dataset = TrajectoryDataset(
-        data_dir, df[df["player_id"].isin(train_player_ids)]
-    )
+        data_dir, df[df["player_id"].isin(train_player_ids)])
     valid_dataset = TrajectoryDataset(
-        data_dir, df[df["player_id"].isin(valid_player_ids)]
-    )
+        data_dir, df[df["player_id"].isin(valid_player_ids)])
 
     train_dataloader = DataLoader(
         train_dataset,
@@ -187,8 +187,7 @@ if __name__ == "__main__":
     from config import TRAIN_DATA_DIR, TRAIN_INFO
 
     train_loader, valid_loader = get_train_valid_dataloader(
-        TRAIN_DATA_DIR, TRAIN_INFO, split_target="gender", batch_size=1
-    )
+        TRAIN_DATA_DIR, TRAIN_INFO, split_target="gender", batch_size=1)
 
     for padded, lengths, metas in train_loader:
         seg = padded[0]  # (L,6)
