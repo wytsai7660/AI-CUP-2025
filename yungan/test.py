@@ -10,6 +10,7 @@ from tqdm import tqdm
 TEST_DIR    = "39_Test_Dataset/test_data"       # 測試資料夾路徑
 WEIGHT_PATH = "weight/weight_05112337.pth"      # 訓練好權重的 .pth 檔
 OUTPUT_CSV  = "test_results.csv"                # 輸出 CSV 檔名
+MAX_SEQ_LEN = 500
 # ───────────────────────────────────────────────────────────────────
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 def normalize(x: torch.Tensor) -> torch.Tensor:
@@ -45,8 +46,10 @@ def main():
         p0_list, p1_list = [], []
         p2_list, p3_list = [], []
         with torch.no_grad():
-            for start, length in segments:
-                seg = data[start:start + length]           # [length, 6]
+            for start, end in segments:
+                seg = data[start:end]           # [length, 6]
+                if seg.shape[0] > MAX_SEQ_LEN:
+                    continue
                 x = torch.from_numpy(seg).float().to(device)
                 x = normalize(x)
                 src = x.unsqueeze(1)                      # [length, 1, 6]
