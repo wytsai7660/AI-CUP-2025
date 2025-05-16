@@ -18,7 +18,7 @@ for path in [TRAIN_DATA_DIR, TRAIN_INFO, TEST_DATA_DIR, TEST_INFO]:
 
 
 # ===== Constants =====
-FIELDS = [
+PREDICTING_FIELDS = [
     "gender",
     "hold racket handed",
     "play years",
@@ -31,3 +31,5 @@ POSSIBLE_VALUES = [
     [0, 1, 2],
     [2, 3, 4, 5],
 ]
+
+NUM_WORKERS = 4
