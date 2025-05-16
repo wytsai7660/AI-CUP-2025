@@ -2,13 +2,13 @@ import os
 import torch
 import numpy as np
 import csv
-from model import EncoderOnlyClassifier      # 請確認你的 model 類名
+from yungan.model import EncoderOnlyClassifier      # 請確認你的 model 類名
 from helper.cut import segment_file           # 你的切片函式
 from tqdm import tqdm
 
 # ─── 在這裡直接定義變數 ────────────────────────────────────────────
 TEST_DIR    = "39_Test_Dataset/test_data"       # 測試資料夾路徑
-WEIGHT_PATH = "weight/weight_05112337.pth"      # 訓練好權重的 .pth 檔
+WEIGHT_PATH = "yungan/weight/weight_05161928.pth"      # 訓練好權重的 .pth 檔
 OUTPUT_CSV  = "test_results.csv"                # 輸出 CSV 檔名
 MAX_SEQ_LEN = 500
 # ───────────────────────────────────────────────────────────────────
@@ -22,7 +22,7 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # 1) 建立並載入模型
-    model = EncoderOnlyClassifier(d_model=6, n_enc=6, dim_ff=512).to(device)
+    model = EncoderOnlyClassifier(d_model=6, n_enc=9, dim_ff=256).to(device)
     state = torch.load(WEIGHT_PATH, map_location=device)
     model.load_state_dict(state)
     model.eval()

@@ -2,14 +2,15 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, random_split
 from config import TRAIN_DATA_DIR, TRAIN_INFO
-from model import EncoderOnlyClassifier
+from yungan.model import EncoderOnlyClassifier
 from helper.dataloader import TrajectoryDataset, collate_fn_torch
-from Focal_Loss import class_weights
+from helper.focal_loss import class_weights
 
 import os
 import copy
 import pandas as pd
 from tqdm import tqdm
+import matplotlib
 from matplotlib import pyplot as plt
 from matplotlib.ticker import MaxNLocator
 import matplotlib.pyplot as plt
@@ -21,20 +22,21 @@ import os
 FOCAL_LOSS_GAMMA = 2.0
 
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+matplotlib.use('Agg')
 def normalize(x):
     return (x - x.mean(dim=0)) / (x.std(dim=0) + 1e-6)    
     
 def main():
 # training parameters
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-    epochs = 30
+    epochs = 40
     learning_rate = 0.0001
-    train_bathch_size = 16
+    train_bathch_size = 8
     valid_batch_size = 16
 
     # data path and weight path
     base_path = os.path.dirname(os.path.abspath(__file__))
-    result_path = os.path.join(base_path, "result")
+    result_path = os.path.join(base_path, "yungan" ,"result")
 
     s = time.strftime("%m%d%H%M", time.localtime())
     filename = f"weight_{s}.pth"
@@ -78,19 +80,18 @@ def main():
         drop_last=True  
     )
     # model
-    model = EncoderOnlyClassifier(d_model=6, n_enc=6, dim_ff=256)
+    model = EncoderOnlyClassifier(d_model=6, n_enc=9, dim_ff=256)
     model = model.to(device)
 
     # set optimizer and loss function
-    # class_weights = class_weights(label_data_path, device)
-    # criterion = torch.hub.load(
-    #     "adeelh/pytorch-multi-class-focal-loss",
-    #     model="FocalLoss",
-    #     alpha=class_weights.to(device),   # 每类权重
-    #     gamma=FOCAL_LOSS_GAMMA,            # 焦点参数
-    #     reduction="mean",
-    # )
-    criterion = nn.CrossEntropyLoss()
+    class_weight = class_weights(TRAIN_INFO, device)
+    criterion = torch.hub.load(
+        "adeelh/pytorch-multi-class-focal-loss",
+        model="FocalLoss",
+        alpha=class_weight.to(device),   # 每类权重
+        gamma=FOCAL_LOSS_GAMMA,            # 焦点参数
+        reduction="mean",
+    )
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate,weight_decay=1e-5)
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=7, gamma=0.1)
 
@@ -203,7 +204,7 @@ def main():
     plt.gca().xaxis.set_major_locator(MaxNLocator(integer=True))
     plt.xlim(1,epoch+1)
     plt.xlabel("Epoch"),plt.ylabel("Loss")
-    plt.savefig(os.path.join(result_path, "Loss_curve"))
+    plt.savefig(os.path.join(result_path, "Loss_curve.png"))
 
     # plot the accuracy curve for training and validation
     pd.DataFrame({
@@ -213,7 +214,7 @@ def main():
     plt.gca().xaxis.set_major_locator(MaxNLocator(integer=True))
     plt.xlim(1,epoch+1)
     plt.xlabel("Epoch"),plt.ylabel("Accuracy")
-    plt.savefig(os.path.join(result_path, "Training_accuracy"))
+    plt.savefig(os.path.join(result_path, "Training_accuracy.png"))
     
     
 if __name__ == "__main__":
