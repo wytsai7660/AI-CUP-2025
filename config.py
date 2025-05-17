@@ -1,6 +1,5 @@
-from pathlib import Path
 import sys
-
+from pathlib import Path
 
 # ===== Paths =====
 BASE_PATH = Path(__file__).parent
