@@ -7,7 +7,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import OneHotEncoder
 from torch.utils.data import DataLoader, Dataset
 
-from config import NUM_WORKERS, POSSIBLE_VALUES, PREDICTING_FIELDS
+from config import NUM_WORKERS, POSSIBLE_VALUES, PREDICTING_FIELDS, SEED
 from helper.cut_methods import cut_by_default, cut_method
 
 INF = int(1e18)
@@ -139,7 +139,7 @@ def get_train_valid_dataloader(
     train_player_ids, valid_player_ids = train_test_split(
         unique_player["player_id"].to_numpy(),
         test_size=0.2,
-        # random_state=42,
+        random_state=SEED,
         stratify=unique_player[split_target].to_numpy(),
     )
 

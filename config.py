@@ -1,5 +1,10 @@
+import os
+import random
 import sys
 from pathlib import Path
+
+import numpy as np
+import torch
 
 # ===== Paths =====
 BASE_PATH = Path(__file__).parent
@@ -32,3 +37,17 @@ POSSIBLE_VALUES = [
 ]
 
 NUM_WORKERS = 4
+
+
+# ===== Reproducibility =====
+
+SEED = 42
+random.seed(SEED)
+np.random.seed(SEED)
+os.environ["PYTHONHASHSEED"] = str(SEED)
+torch.manual_seed(SEED)
+torch.cuda.manual_seed(SEED)
+
+# Set to True for max reproducibility, but performance will be much slower
+torch.backends.cudnn.deterministic = False
+torch.backends.cudnn.benchmark = False
