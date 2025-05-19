@@ -8,16 +8,16 @@ from sklearn.preprocessing import OneHotEncoder
 from torch.utils.data import DataLoader, Dataset
 
 from config import NUM_WORKERS, POSSIBLE_VALUES, PREDICTING_FIELDS, SEED
-from helper.cut_methods import cut_by_default, cut_method
+from helper.segment import Segment
 
 INF = int(1e18)
 
 
 class TrajectoryDataset(Dataset):
     """
-    每筆 item 回傳 (segment, meta)，皆為 torch.Tensor：
-    - segment: shape=(L, 6), dtype=torch.float32
-    - meta   : one-hot vector for [gender, hand, years, level], dtype=torch.float32
+    每筆 item 回傳 (segment, meta)，皆為 torch.Tensor:
+    - seg  : shape=(L, 6), dtype=torch.float32
+    - meta : one-hot vector for [gender, hand, years, level], dtype=torch.float32
 
     Note:
     - dataframe: should contain columns `['unique_id', 'player_id'] + PREDICTING_FIELDS`
@@ -31,7 +31,7 @@ class TrajectoryDataset(Dataset):
         dataframe: pd.DataFrame,
         min_duration: int = -INF,
         max_duration: int = INF,
-        cut_method: cut_method = cut_by_default(),
+        segment: Segment | None = None,
         transform: Callable[[torch.Tensor], torch.Tensor] | None = None,
     ):
         self.transform = transform
@@ -48,16 +48,17 @@ class TrajectoryDataset(Dataset):
             data_dir / f"{unique_id}.txt" for unique_id in dataframe["unique_id"].values
         ]
         for fpath, meta in zip(fpaths, metas):
-            # print(fpath)
             data = torch.tensor(
                 pd.read_csv(fpath, sep=r"\s+", header=None).values, dtype=torch.float32
             )
-            _, segs = cut_method(fpath)
-            for st, ed in segs:
-                duration = ed - st + 1
-                if duration < min_duration or duration > max_duration:
-                    continue
-                self.samples.append((data[st : ed + 1, :], meta))
+            if segment:
+                for seg in segment(data):
+                    duration = seg.shape[0]
+                    if duration < min_duration or duration > max_duration:
+                        continue
+                    self.samples.append((seg, meta))
+            else:
+                self.samples.append((data, meta))
 
     def __len__(self):
         return len(self.samples)
@@ -91,7 +92,7 @@ def get_train_valid_dataloader(
     batch_size: int = 32,
     min_duration: int = -INF,
     max_duration: int = INF,
-    cut_method: cut_method = cut_by_default(),
+    segment: Segment | None = None,
     train_transform: Callable[[torch.Tensor], torch.Tensor] | None = None,
     valid_transform: Callable[[torch.Tensor], torch.Tensor] | None = None,
 ) -> Tuple[DataLoader, DataLoader]:
@@ -115,8 +116,8 @@ def get_train_valid_dataloader(
         The minimum duration of segments to include in the dataset (default is -INF).
     `max_duration`: `int`, optional
         The maximum duration of segments to include in the dataset (default is INF).
-    `cut_method`: `cut_method`, optional
-        The method to use for cutting the trajectory data into segments (default is `cut_by_default()`).
+    `segment`: `Segment` | `None`, optional
+        The segmenting method to apply to the data (default is None, which means no segmentation).
     `train_transform`: `Callable`, optional
         A function to apply transformations to the training data (default is None).
     `valid_transform`: `Callable`, optional
@@ -169,7 +170,7 @@ def get_train_valid_dataloader(
         df[df["player_id"].isin(train_player_ids)],
         min_duration=min_duration,
         max_duration=max_duration,
-        cut_method=cut_method,
+        segment=segment,
         transform=train_transform,
     )
     valid_dataset = TrajectoryDataset(
@@ -177,7 +178,7 @@ def get_train_valid_dataloader(
         df[df["player_id"].isin(valid_player_ids)],
         min_duration=min_duration,
         max_duration=max_duration,
-        cut_method=cut_method,
+        segment=segment,
         transform=valid_transform,
     )
 
@@ -204,14 +205,14 @@ if __name__ == "__main__":
     import matplotlib.pyplot as plt
 
     from config import TRAIN_DATA_DIR, TRAIN_INFO
-    from helper.cut_methods import cut_by_segment_file
+    from helper.segment import *
 
     train_loader, valid_loader = get_train_valid_dataloader(
         TRAIN_DATA_DIR,
         TRAIN_INFO,
         split_target="gender",
         batch_size=1,
-        cut_method=cut_by_segment_file(smooth_w=6, perc=75),
+        segment=Yungan(),
     )
 
     for padded, lengths, metas in train_loader:
@@ -230,4 +231,4 @@ if __name__ == "__main__":
         plt.show()
         print("Meta shape:", metas.shape)
         print("Meta vector:", metas[0])
-        break
+        # break
