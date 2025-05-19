@@ -11,12 +11,13 @@ sampling_rate = 85.0  # 原始信号采样率
 pattern = re.compile(r"\d+")
 
 # 生成一个可调用的切分函数
-cut_fn = no_cut()
+cut_fn = cut_by_ts_closuring()
 
 # 读取测试集信息
 data = pd.read_csv("39_Test_Dataset/test_info.csv").to_numpy()
 test_players_X = []
 lens = []
+count = 0
 
 for item in data:
     temp = {}
@@ -73,7 +74,9 @@ for item in data:
     # plt.legend()
     plt.show()
     # show only one
-    break
+    if count > 20:
+        break
+    count += 1
 
 # plt.hist(lens, bins=40)
 # plt.show()
