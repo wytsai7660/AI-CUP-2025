@@ -5,6 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "hmmlearn>=0.3.3",
     "matplotlib>=3.10.1",
     "numpy>=2.2.5",
     "pandas>=2.2.3",
@@ -12,4 +13,10 @@ dependencies = [
     "scikit-learn>=1.6.1",
     "torch>=2.7.0",
     "tqdm>=4.67.1",
+]
+
+[dependency-groups]
+dev = [
+    "black>=25.1.0",
+    "isort>=6.0.1",
 ]

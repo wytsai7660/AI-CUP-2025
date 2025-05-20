@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Callable, List, Tuple
+from typing import List, Tuple
 
 import pandas as pd
 import torch
@@ -7,67 +7,59 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import OneHotEncoder
 from torch.utils.data import DataLoader, Dataset
 
-from config import NUM_WORKERS, POSSIBLE_VALUES, PREDICTING_FIELDS
-from helper.cut import segment_file
-from helper.cut_methods import *
+from config import MEAN, NUM_WORKERS, POSSIBLE_VALUES, PREDICTING_FIELDS, SEED
+from helper.segment import Segment
+from helper.transform import Transform
+
+INF = int(1e18)
 
 
 class TrajectoryDataset(Dataset):
     """
-    每筆 item 回傳 (segment, meta)，皆為 torch.Tensor：
-    - segment: shape=(L, 6), dtype=torch.float32
-    - meta   : one-hot vector for [gender, hand, years, level], dtype=torch.float32
+    每筆 item 回傳 (segment, meta)，皆為 torch.Tensor:
+    - seg  : shape=(L, 6), dtype=torch.float32
+    - meta : one-hot vector for [gender, hand, years, level], dtype=torch.float32
 
     Note:
     - dataframe: should contain columns `['unique_id', 'player_id'] + PREDICTING_FIELDS`
     """
 
     REQUIRED_FIELDS = ["unique_id", "player_id"] + PREDICTING_FIELDS
-    INF = int(1e18)
 
     def __init__(
         self,
         data_dir: Path,
         dataframe: pd.DataFrame,
-        smooth_w: int = 5,
-        perc: int = 75,
-        dist_frac: float = 0.3,
         min_duration: int = -INF,
         max_duration: int = INF,
-        cut_method: Callable[..., tuple[pd.DataFrame,
-                                        list]] = cut_by_default(),
-        transform: Callable[[torch.Tensor], torch.Tensor] | None = None,
+        segment: Segment | None = None,
+        transform: Transform | None = None,
     ):
         self.transform = transform
-        self.seg_args = dict(
-            smooth_w=smooth_w, perc=perc,
-            dist_frac=dist_frac)  # TODO: isolate the segmenting logic
 
         df_to_encode = dataframe[PREDICTING_FIELDS]
-        encoder = OneHotEncoder(categories=POSSIBLE_VALUES,
-                                sparse_output=False)
-        metas = torch.tensor(encoder.fit_transform(df_to_encode),
-                             dtype=torch.float32)
+        encoder = OneHotEncoder(categories=POSSIBLE_VALUES, sparse_output=False)
+        metas = torch.tensor(encoder.fit_transform(df_to_encode), dtype=torch.float32)
 
         # print(metas.shape)
         # print(metas)
 
         self.samples: List[Tuple[torch.Tensor, torch.Tensor]] = []
         fpaths = [
-            data_dir / f"{unique_id}.txt"
-            for unique_id in dataframe["unique_id"].values
+            data_dir / f"{unique_id}.txt" for unique_id in dataframe["unique_id"].values
         ]
         for fpath, meta in zip(fpaths, metas):
-            # print(fpath)
-            data = torch.tensor(pd.read_csv(fpath, sep=r"\s+",
-                                            header=None).values,
-                                dtype=torch.float32)
-            _, segs = cut_method(fpath)
-            for st, ed in segs:
-                duration = ed - st + 1
-                if duration < min_duration or duration > max_duration:
-                    continue
-                self.samples.append((data[st:ed + 1, :], meta))
+            data = torch.tensor(
+                pd.read_csv(fpath, sep=r"\s+", header=None).values, dtype=torch.float32
+            )
+            if segment:
+                for seg in segment(data):
+                    duration = seg.shape[0]
+                    if duration < min_duration or duration > max_duration:
+                        continue
+                    self.samples.append((seg, meta))
+            else:
+                self.samples.append((data, meta))
 
     def __len__(self):
         return len(self.samples)
@@ -89,8 +81,7 @@ def collate_fn_torch(batch: List[Tuple[torch.Tensor, torch.Tensor]]):
     """
     segments, metas = zip(*batch)
     lengths = torch.tensor([s.size(0) for s in segments], dtype=torch.long)
-    padded = torch.nn.utils.rnn.pad_sequence(segments,
-                                             batch_first=True)  # type: ignore
+    padded = torch.nn.utils.rnn.pad_sequence(segments, batch_first=True)  # type: ignore
     metas = torch.stack(metas, dim=0)
     return padded, lengths, metas
 
@@ -100,6 +91,11 @@ def get_train_valid_dataloader(
     info_csv: Path,
     split_target: str = "gender",
     batch_size: int = 32,
+    min_duration: int = -INF,
+    max_duration: int = INF,
+    segment: Segment | None = None,
+    train_transform: Transform | None = None,
+    valid_transform: Transform | None = None,
 ) -> Tuple[DataLoader, DataLoader]:
     """
     Splits the data into training and validation DataLoaders
@@ -114,6 +110,20 @@ def get_train_valid_dataloader(
         The column name in the CSV to use for stratified splitting, can be one of the fields in `PREDICTING_FIELDS` (default is "gender").
     `batch_size`: `int`, optional
         The batch size to use for the DataLoaders (default is 32).
+
+    Parameters
+    ------------------
+    `min_duration`: `int`, optional
+        The minimum duration of segments to include in the dataset (default is -INF).
+    `max_duration`: `int`, optional
+        The maximum duration of segments to include in the dataset (default is INF).
+    `segment`: `Segment` | `None`, optional
+        The segmenting method to apply to the data (default is None, which means no segmentation).
+    `train_transform`: `Transform` | `None`, optional
+        The transformation to apply to the training data (default is None, which means no transformation).
+    `valid_transform`: `Transform` | `None`, optional
+        The transformation to apply to the validation data (default is None, which means no transformation).
+
 
     Returns
     -------
@@ -132,7 +142,7 @@ def get_train_valid_dataloader(
     train_player_ids, valid_player_ids = train_test_split(
         unique_player["player_id"].to_numpy(),
         test_size=0.2,
-        # random_state=42,
+        random_state=SEED,
         stratify=unique_player[split_target].to_numpy(),
     )
 
@@ -158,9 +168,21 @@ def get_train_valid_dataloader(
     # print(f"test count: {dict(count)}")
 
     train_dataset = TrajectoryDataset(
-        data_dir, df[df["player_id"].isin(train_player_ids)])
+        data_dir,
+        df[df["player_id"].isin(train_player_ids)],
+        min_duration=min_duration,
+        max_duration=max_duration,
+        segment=segment,
+        transform=train_transform,
+    )
     valid_dataset = TrajectoryDataset(
-        data_dir, df[df["player_id"].isin(valid_player_ids)])
+        data_dir,
+        df[df["player_id"].isin(valid_player_ids)],
+        min_duration=min_duration,
+        max_duration=max_duration,
+        segment=segment,
+        transform=valid_transform,
+    )
 
     train_dataloader = DataLoader(
         train_dataset,
@@ -184,10 +206,27 @@ if __name__ == "__main__":
     # Example: Visualize a training sample
     import matplotlib.pyplot as plt
 
-    from config import TRAIN_DATA_DIR, TRAIN_INFO
+    from config import MEAN, STD, TRAIN_DATA_DIR, TRAIN_INFO
+    from helper.segment import *
+    from helper.transform import *
 
     train_loader, valid_loader = get_train_valid_dataloader(
-        TRAIN_DATA_DIR, TRAIN_INFO, split_target="gender", batch_size=1)
+        TRAIN_DATA_DIR,
+        TRAIN_INFO,
+        split_target="gender",
+        batch_size=1,
+        segment=Yungan(),
+        train_transform=Compose(
+            [
+                Normalize(mean=MEAN, std=STD),
+            ]
+        ),
+        valid_transform=Compose(
+            [
+                Normalize(mean=MEAN, std=STD),
+            ]
+        ),
+    )
 
     for padded, lengths, metas in train_loader:
         seg = padded[0]  # (L,6)
@@ -205,4 +244,4 @@ if __name__ == "__main__":
         plt.show()
         print("Meta shape:", metas.shape)
         print("Meta vector:", metas[0])
-        break
+        # break
