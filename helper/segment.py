@@ -7,6 +7,10 @@ import torch
 from scipy.ndimage import uniform_filter1d
 from scipy.signal import find_peaks
 
+from scipy.signal import detrend
+from scipy.signal import butter, filtfilt
+from sklearn.preprocessing import MinMaxScaler
+
 """
 The segmenting method to apply to the data
 ----------
@@ -172,6 +176,85 @@ class ChangePoint(Segment):
         # 最后一段
         segs.append(data[start : len(a_env) - 1])
         return segs
+
+class IntergratedSplit(Segment):
+    """
+    實現 https://arxiv.org/abs/2306.17550 中提及的 Waveform Split Algorithm
+
+    如果偵測到的揮拍次數不夠，則使用Yungan的分段方法
+    """
+    
+
+    def __init__(self):
+        pass
+    
+    def lowpass_filter(data, cutoff=5, fs=85, order=4):
+        nyq = 0.5 * fs
+        normal_cutoff = cutoff / nyq
+        b, a = butter(order, normal_cutoff, btype='low', analog=False)
+        return filtfilt(b, a, data)
+
+    def find_k(waveform, crossings_num = 54, step=0.001):
+        max_y = 1.0
+        min_y = 0.0
+        k = max_y
+
+        cnt = 0
+        while k >= min_y:
+            shifted = waveform - k
+            signs = np.sign(shifted)
+            crossings = np.where(np.diff(signs))[0]
+            n_crossings = len(crossings)
+
+            if n_crossings >= crossings_num:
+                if cnt < 5:
+                    cnt += 1
+                else:
+                    return k, crossings
+            k -= step
+
+        return None, None
+    
+    def find_troughs(waveform, crossing_indices):
+        # left_vals = waveform[np.clip(crossing_indices - 1, 0, len(waveform) - 1)]
+        # right_vals = waveform[np.clip(crossing_indices + 1, 0, len(waveform) - 1)]
+        # direction = np.where(right_vals < left_vals, 1, -1)
+        assert len(crossing_indices) % 2 == 0
+        
+        # make direction alternate between -1 and 1
+        direction = np.tile([-1, 1], len(crossing_indices) // 2 + 1)[:len(crossing_indices)]
+
+        trough_indices = crossing_indices.copy()
+        searching = np.ones_like(trough_indices, dtype=bool)
+
+        while np.any(searching):
+            next_indices = np.clip(trough_indices + direction, 0, len(waveform) - 1)
+            move_mask = (waveform[next_indices] < waveform[trough_indices]) & searching
+            trough_indices[move_mask] = next_indices[move_mask]
+            searching &= move_mask
+        
+
+        return trough_indices
+
+
+    def __call__(self, data: torch.Tensor) -> List[torch.Tensor]:
+        integrated_waveform = np.sum(np.abs(data), axis=1)
+        detrend_waveform = detrend(integrated_waveform)
+        filtered_waveform = self.lowpass_filter(detrend_waveform)
+        scaler = MinMaxScaler(feature_range=(0, 1))
+        scaled_waveform = scaler.fit_transform(filtered_waveform.reshape(-1, 1)).flatten()
+        k, crossings = self.find_k(scaled_waveform)
+        
+        if k is None:
+            # fallback to yungan's method
+            return Yungan()(data)
+        
+        trough_indices = self.find_troughs(scaled_waveform, crossings)
+        segs = [(s, e) for s, e in zip(trough_indices[::2], trough_indices[1::2])]
+        
+        return segs
+
+
 
 
 # class cut_by_hmm(cut_method):
