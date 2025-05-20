@@ -38,6 +38,14 @@ POSSIBLE_VALUES = [
 
 NUM_WORKERS = 4
 
+# === Pre-Computed Values ===
+# Run `helper.pre-compute` to recompute them if needed
+MEAN = torch.Tensor(
+    [-641.6706, -2168.8293, -106.0658, 2665.5098, 4612.9365, -1239.6418]
+)
+STD = torch.Tensor(
+    [4746.2964, 3781.6528, 2564.6877, 20106.4824, 15148.3379, 21313.9180]
+)
 
 # ===== Reproducibility =====
 

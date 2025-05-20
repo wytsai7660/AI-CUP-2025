@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Callable, List, Tuple
+from typing import List, Tuple
 
 import pandas as pd
 import torch
@@ -7,8 +7,9 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import OneHotEncoder
 from torch.utils.data import DataLoader, Dataset
 
-from config import NUM_WORKERS, POSSIBLE_VALUES, PREDICTING_FIELDS, SEED
+from config import MEAN, NUM_WORKERS, POSSIBLE_VALUES, PREDICTING_FIELDS, SEED
 from helper.segment import Segment
+from helper.transform import Transform
 
 INF = int(1e18)
 
@@ -32,7 +33,7 @@ class TrajectoryDataset(Dataset):
         min_duration: int = -INF,
         max_duration: int = INF,
         segment: Segment | None = None,
-        transform: Callable[[torch.Tensor], torch.Tensor] | None = None,
+        transform: Transform | None = None,
     ):
         self.transform = transform
 
@@ -93,8 +94,8 @@ def get_train_valid_dataloader(
     min_duration: int = -INF,
     max_duration: int = INF,
     segment: Segment | None = None,
-    train_transform: Callable[[torch.Tensor], torch.Tensor] | None = None,
-    valid_transform: Callable[[torch.Tensor], torch.Tensor] | None = None,
+    train_transform: Transform | None = None,
+    valid_transform: Transform | None = None,
 ) -> Tuple[DataLoader, DataLoader]:
     """
     Splits the data into training and validation DataLoaders
@@ -118,10 +119,11 @@ def get_train_valid_dataloader(
         The maximum duration of segments to include in the dataset (default is INF).
     `segment`: `Segment` | `None`, optional
         The segmenting method to apply to the data (default is None, which means no segmentation).
-    `train_transform`: `Callable`, optional
-        A function to apply transformations to the training data (default is None).
-    `valid_transform`: `Callable`, optional
-        A function to apply transformations to the validation data (default is None).
+    `train_transform`: `Transform` | `None`, optional
+        The transformation to apply to the training data (default is None, which means no transformation).
+    `valid_transform`: `Transform` | `None`, optional
+        The transformation to apply to the validation data (default is None, which means no transformation).
+
 
     Returns
     -------
@@ -204,8 +206,9 @@ if __name__ == "__main__":
     # Example: Visualize a training sample
     import matplotlib.pyplot as plt
 
-    from config import TRAIN_DATA_DIR, TRAIN_INFO
+    from config import MEAN, STD, TRAIN_DATA_DIR, TRAIN_INFO
     from helper.segment import *
+    from helper.transform import *
 
     train_loader, valid_loader = get_train_valid_dataloader(
         TRAIN_DATA_DIR,
@@ -213,6 +216,16 @@ if __name__ == "__main__":
         split_target="gender",
         batch_size=1,
         segment=Yungan(),
+        train_transform=Compose(
+            [
+                Normalize(mean=MEAN, std=STD),
+            ]
+        ),
+        valid_transform=Compose(
+            [
+                Normalize(mean=MEAN, std=STD),
+            ]
+        ),
     )
 
     for padded, lengths, metas in train_loader:
