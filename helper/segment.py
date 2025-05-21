@@ -1,3 +1,4 @@
+import warnings
 from abc import ABC, abstractmethod
 from typing import List
 
@@ -5,10 +6,7 @@ import numpy as np
 import ruptures as rpt
 import torch
 from scipy.ndimage import uniform_filter1d
-from scipy.signal import find_peaks
-
-from scipy.signal import detrend
-from scipy.signal import butter, filtfilt
+from scipy.signal import butter, detrend, filtfilt, find_peaks
 from sklearn.preprocessing import MinMaxScaler
 
 """
@@ -177,24 +175,26 @@ class ChangePoint(Segment):
         segs.append(data[start : len(a_env) - 1])
         return segs
 
+
 class IntergratedSplit(Segment):
     """
     實現 https://arxiv.org/abs/2306.17550 中提及的 Waveform Split Algorithm
 
     如果偵測到的揮拍次數不夠，則使用Yungan的分段方法
     """
-    
 
     def __init__(self):
         pass
-    
+
+    @staticmethod
     def lowpass_filter(data, cutoff=5, fs=85, order=4):
         nyq = 0.5 * fs
         normal_cutoff = cutoff / nyq
-        b, a = butter(order, normal_cutoff, btype='low', analog=False)
+        b, a = butter(order, normal_cutoff, btype="low", analog=False)
         return filtfilt(b, a, data)
 
-    def find_k(waveform, crossings_num = 54, step=0.001):
+    @staticmethod
+    def find_k(waveform, crossings_num=54, step=0.001):
         max_y = 1.0
         min_y = 0.0
         k = max_y
@@ -207,22 +207,24 @@ class IntergratedSplit(Segment):
             n_crossings = len(crossings)
 
             if n_crossings >= crossings_num:
-                if cnt < 5:
-                    cnt += 1
-                else:
-                    return k, crossings
+                # if cnt < 5:
+                #     cnt += 1
+                # else:
+                return k, crossings
             k -= step
 
         return None, None
-    
+
+    @staticmethod
     def find_troughs(waveform, crossing_indices):
-        # left_vals = waveform[np.clip(crossing_indices - 1, 0, len(waveform) - 1)]
-        # right_vals = waveform[np.clip(crossing_indices + 1, 0, len(waveform) - 1)]
-        # direction = np.where(right_vals < left_vals, 1, -1)
-        assert len(crossing_indices) % 2 == 0
-        
+        assert (
+            len(crossing_indices) % 2 == 0
+        ), f"Number of crossings must be even, got {len(crossing_indices)}"
+
         # make direction alternate between -1 and 1
-        direction = np.tile([-1, 1], len(crossing_indices) // 2 + 1)[:len(crossing_indices)]
+        direction = np.tile([-1, 1], len(crossing_indices) // 2 + 1)[
+            : len(crossing_indices)
+        ]
 
         trough_indices = crossing_indices.copy()
         searching = np.ones_like(trough_indices, dtype=bool)
@@ -232,29 +234,36 @@ class IntergratedSplit(Segment):
             move_mask = (waveform[next_indices] < waveform[trough_indices]) & searching
             trough_indices[move_mask] = next_indices[move_mask]
             searching &= move_mask
-        
 
         return trough_indices
 
-
     def __call__(self, data: torch.Tensor) -> List[torch.Tensor]:
-        integrated_waveform = np.sum(np.abs(data), axis=1)
+        data_np = data.numpy().copy()
+        integrated_waveform = np.sum(np.abs(data_np), axis=1)
         detrend_waveform = detrend(integrated_waveform)
         filtered_waveform = self.lowpass_filter(detrend_waveform)
         scaler = MinMaxScaler(feature_range=(0, 1))
-        scaled_waveform = scaler.fit_transform(filtered_waveform.reshape(-1, 1)).flatten()
+        scaled_waveform = scaler.fit_transform(
+            filtered_waveform.reshape(-1, 1)
+        ).flatten()
         k, crossings = self.find_k(scaled_waveform)
-        
+
         if k is None:
+            warnings.warn(
+                "IntegratedSplit: fallback to Yungan method due to insufficient swings",
+                UserWarning,
+            )
             # fallback to yungan's method
             return Yungan()(data)
-        
+
         trough_indices = self.find_troughs(scaled_waveform, crossings)
-        segs = [(s, e) for s, e in zip(trough_indices[::2], trough_indices[1::2])]
-        
+
+        segs = [
+            (s.item(), e.item())
+            for s, e in zip(trough_indices[::2], trough_indices[1::2])
+        ]
+
         return segs
-
-
 
 
 # class cut_by_hmm(cut_method):
@@ -388,3 +397,60 @@ class IntergratedSplit(Segment):
 #             segs.append(tuple(current))
 
 #         return df, segs
+
+
+if __name__ == "__main__":
+    import argparse
+
+    import matplotlib.pyplot as plt
+    import pandas as pd
+
+    from config import CHANNELS, TRAIN_DATA_DIR
+
+    # Example usage:
+    # 1.
+    # uv run -m helper.segment -m "Yungan()"
+    # 2.
+    # uv run -m helper.segment -m "FixedSize(size=40)"
+    # 3.
+    # uv run -m helper.segment -m "lambda x: [x]"
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "-m",
+        "--method",
+        type=str,
+        required=True,
+        help="切分方法",
+    )
+    args = parser.parse_args()
+    method: str = args.method
+
+    for fpath in sorted(TRAIN_DATA_DIR.iterdir(), key=lambda x: int(x.stem)):
+        data = torch.tensor(
+            pd.read_csv(fpath, sep=r"\s+", header=None).values, dtype=torch.float32
+        )
+
+        plt.figure(figsize=(12, 12))
+        plt.title(f"{method}, {fpath.name}")
+        plt.axis("off")
+
+        for i, channel in enumerate(CHANNELS):
+            plt.subplot(len(CHANNELS), 1, i + 1)
+
+            # HACK: use eval() to dynamically call the segment method
+            segment = eval(method)
+            segs = segment(data)
+            segs = [seg[:, i] for seg in segs]
+
+            x_offset = 0
+            for y in segs:
+                x = np.arange(len(y)) + x_offset
+                plt.plot(x, y)
+                x_offset += len(y)
+
+            plt.xticks([])
+            plt.ylabel(channel)
+
+        plt.tight_layout()
+        plt.show()
