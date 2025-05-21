@@ -1,6 +1,7 @@
 from pathlib import Path
 from typing import List, Tuple
 
+import numpy as np
 import pandas as pd
 import torch
 from sklearn.model_selection import train_test_split
@@ -40,21 +41,15 @@ class TrajectoryDataset(Dataset):
         # print(metas)
 
         self.samples: List[Tuple[torch.Tensor, torch.Tensor]] = []
-        fpaths = [
-            data_dir / f"{unique_id}.txt" for unique_id in dataframe["unique_id"].values
-        ]
+        fpaths = [data_dir / f"{id}.txt" for id in dataframe["unique_id"].values]
         for fpath, meta in zip(fpaths, metas):
-            data = torch.tensor(
-                pd.read_csv(fpath, sep=r"\s+", header=None).values, dtype=torch.float32
-            )
-            if segment:
-                for seg in segment(data):
-                    duration = seg.shape[0]
-                    if duration < min_duration or duration > max_duration:
-                        continue
-                    self.samples.append((seg, meta))
-            else:
-                self.samples.append((data, meta))
+            data = torch.from_numpy(np.loadtxt(fpath))
+            segs = segment(data) if segment else [data]
+            self.samples += [
+                (seg, meta)
+                for seg in segs
+                if min_duration <= seg.shape[0] <= max_duration
+            ]
 
     def __len__(self):
         return len(self.samples)
