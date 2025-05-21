@@ -47,3 +47,8 @@ class EncoderOnlyClassifier(nn.Module):
         last = memory[-1]   # shape: (batch_size, d_model)
         logits = self.classifier(last)  # shape: (batch_size, 9)
         return logits
+    
+if __name__ == "__main__":
+    model = EncoderOnlyClassifier()
+    for name, param in model.named_parameters():
+        print(name, param.shape)

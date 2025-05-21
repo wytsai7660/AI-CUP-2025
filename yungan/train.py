@@ -1,10 +1,14 @@
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader, random_split
-from config import TRAIN_DATA_DIR, TRAIN_INFO
-from yungan.model import EncoderOnlyClassifier
-from helper.dataloader import TrajectoryDataset, collate_fn_torch
+from torch.optim.lr_scheduler import LambdaLR
+from config import TRAIN_DATA_DIR, TRAIN_INFO, MEAN, STD
+from yungan.model_withoutPE import EncoderOnlyClassifier
+from helper.dataloader import get_train_valid_dataloader
 from helper.focal_loss import class_weights
+from helper.segment import *
+from helper.transform import *
+from helper.cosine_schedule_with_warmup import get_linear_warmup_cosine_scheduler
+
 
 import os
 import copy
@@ -22,62 +26,43 @@ import os
 FOCAL_LOSS_GAMMA = 2.0
 
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
-matplotlib.use('Agg')
+matplotlib.use('TkAgg')
 def normalize(x):
     return (x - x.mean(dim=0)) / (x.std(dim=0) + 1e-6)    
     
 def main():
 # training parameters
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-    epochs = 40
+    epochs = 100
     learning_rate = 0.0001
-    train_bathch_size = 8
-    valid_batch_size = 16
+    train_bathch_size = 32
 
     # data path and weight path
     base_path = os.path.dirname(os.path.abspath(__file__))
-    result_path = os.path.join(base_path, "yungan" ,"result")
+    result_path = os.path.join(base_path,"result")
 
     s = time.strftime("%m%d%H%M", time.localtime())
     filename = f"weight_{s}.pth"
     weight_path = os.path.join(base_path, "weight", filename)
 
     #dataloader
-    ds = TrajectoryDataset(
-        data_dir=TRAIN_DATA_DIR,
-        info_csv=TRAIN_INFO,
-        smooth_w=5,
-        perc=75,
-        dist_frac=0.3,
-        min_duration=20,
-        max_duration=500,
-        transform=normalize
-    ) 
-    total_len = len(ds)
-    train_len = int(0.8 * total_len)
-    valid_len = total_len - train_len
-
-    train_ds, valid_ds = random_split(
-        ds,
-        [train_len, valid_len],
-        generator=torch.Generator().manual_seed(42)  # 固定隨機種子，方便重現
-    )
-
-    train_loader = DataLoader(
-        train_ds,
+    train_loader, valid_loader = get_train_valid_dataloader(
+        TRAIN_DATA_DIR,
+        TRAIN_INFO,
+        split_target="gender",
         batch_size=train_bathch_size,
-        shuffle=True,
-        num_workers=4,
-        collate_fn=collate_fn_torch
-    )
-
-    valid_loader = DataLoader(
-        valid_ds,
-        batch_size=valid_batch_size,
-        shuffle=False,        # valid 通常不需要 shuffle
-        num_workers=4,
-        collate_fn=collate_fn_torch,
-        drop_last=True  
+        segment=Yungan(),
+        max_duration = 500,
+        train_transform=Compose(
+            [
+                Normalize(mean=MEAN, std=STD),
+            ]
+        ),
+        valid_transform=Compose(
+            [
+                Normalize(mean=MEAN, std=STD),
+            ]
+        ),
     )
     # model
     model = EncoderOnlyClassifier(d_model=6, n_enc=9, dim_ff=256)
@@ -85,15 +70,63 @@ def main():
 
     # set optimizer and loss function
     class_weight = class_weights(TRAIN_INFO, device)
-    criterion = torch.hub.load(
-        "adeelh/pytorch-multi-class-focal-loss",
-        model="FocalLoss",
-        alpha=class_weight.to(device),   # 每类权重
-        gamma=FOCAL_LOSS_GAMMA,            # 焦点参数
-        reduction="mean",
+    # criterion = torch.hub.load(
+    #     "adeelh/pytorch-multi-class-focal-loss",
+    #     model="FocalLoss",
+    #     alpha=class_weight.to(device),   # 每类权重
+    #     gamma=FOCAL_LOSS_GAMMA,            # 焦点参数
+    #     reduction="mean",
+    # )
+    w = class_weight
+    criterion_list = [
+        torch.hub.load(
+            "adeelh/pytorch-multi-class-focal-loss",
+            model="FocalLoss",
+            alpha=w[0:2], gamma=FOCAL_LOSS_GAMMA,
+            reduction="mean"
+        ),  # gender: 2 类
+        torch.hub.load(
+            "adeelh/pytorch-multi-class-focal-loss",
+            model="FocalLoss",
+            alpha=w[2:4], gamma=FOCAL_LOSS_GAMMA,
+            reduction="mean"
+        ),  # hold-handed: 2 类
+        torch.hub.load(
+            "adeelh/pytorch-multi-class-focal-loss",
+            model="FocalLoss",
+            alpha=w[4:7], gamma=FOCAL_LOSS_GAMMA,
+            reduction="mean"
+        ),  # play‐years: 3 类
+        torch.hub.load(
+            "adeelh/pytorch-multi-class-focal-loss",
+            model="FocalLoss",
+            alpha=w[7:11], gamma=FOCAL_LOSS_GAMMA,
+            reduction="mean"
+        ),  # level: 4 类
+    ]
+    
+    # criterion = nn.CrossEntropyLoss()
+    decay, no_decay = [], []
+    for name, param in model.named_parameters():
+        if not param.requires_grad:
+            continue
+        if name.endswith("bias") or "norm" in name:
+            no_decay.append(param)
+        else:
+            decay.append(param)
+
+    optimizer = torch.optim.AdamW(
+        [{"params": decay,    "weight_decay": 1e-3},
+        {"params": no_decay, "weight_decay": 0.0}],
+        lr=learning_rate
     )
-    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate,weight_decay=1e-5)
-    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=7, gamma=0.1)
+    # optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate,weight_decay=1e-5)
+    scheduler = get_linear_warmup_cosine_scheduler(
+        optimizer=optimizer,
+        epochs=epochs,
+        train_loader_len=len(train_loader),
+        warmup_ratio=0.1
+    )
 
     # train
     train_loss_list = list()
@@ -132,10 +165,10 @@ def main():
             
             loss = 0
             bsz = output.size(0)
-            for (start, end) in [(0,2), (2,4), (4,7), (7,11)]:
+            for i, (start, end) in enumerate([(0,2), (2,4), (4,7), (7,11)]):
                 logits_group = output[:, start:end]                # [B, group_size]
                 targets_group = label_onehot[:, start:end].argmax(dim=1)  # [B]
-                loss += criterion(logits_group, targets_group)     # 累加每组 loss
+                loss += criterion_list[i](logits_group, targets_group)     # 累加每组 loss
 
                 preds_group = logits_group.argmax(dim=1)           # [B]
                 train_correct += (preds_group == targets_group).sum().item()
@@ -161,13 +194,13 @@ def main():
                 output = model(src)                            # [B, 11]
 
                 # 3) 对每个子段，动态读取当前 batch size
-                for start, end in [(0,2), (2,4), (4,7), (7,11)]:
+                for i, (start, end) in enumerate([(0,2), (2,4), (4,7), (7,11)]):
                     logits_group  = output[:, start:end]            # [cur_B, group_size]
                     targets_group = label_onehot[:, start:end].argmax(dim=1)  # [cur_B]
                     cur_B = logits_group.size(0)                    # 真正的 batch 大小
 
                     # 累加加权 loss
-                    valid_loss    += criterion(logits_group, targets_group).item() * cur_B
+                    valid_loss    += criterion_list[i](logits_group, targets_group).item() * cur_B
                     # 累加正确数
                     valid_correct += (logits_group.argmax(dim=1) == targets_group).sum().item()
                     # 累加样本数（按四段算，所以会加四次 cur_B）
