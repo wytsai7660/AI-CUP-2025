@@ -19,12 +19,7 @@ class TrajectoryDataset(Dataset):
     每筆 item 回傳 (segment, meta)，皆為 torch.Tensor:
     - seg  : shape=(L, 6), dtype=torch.float32
     - meta : one-hot vector for [gender, hand, years, level], dtype=torch.float32
-
-    Note:
-    - dataframe: should contain columns `['unique_id', 'player_id'] + PREDICTING_FIELDS`
     """
-
-    REQUIRED_FIELDS = ["unique_id", "player_id"] + PREDICTING_FIELDS
 
     def __init__(
         self,
@@ -136,7 +131,7 @@ def get_train_valid_dataloader(
     - Stratified splitting is used based on the `split_target` column to maintain class distribution.
     """
 
-    df = pd.read_csv(info_csv)[TrajectoryDataset.REQUIRED_FIELDS]
+    df = pd.read_csv(info_csv)
     unique_player = df.drop_duplicates(subset=["player_id"])
 
     train_player_ids, valid_player_ids = train_test_split(
