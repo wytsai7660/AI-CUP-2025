@@ -5,10 +5,10 @@ import numpy as np
 import pandas as pd
 import torch
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import OneHotEncoder
 from torch.utils.data import DataLoader, Dataset
 
-from config import MEAN, NUM_WORKERS, POSSIBLE_VALUES, PREDICTING_FIELDS, SEED
+from config import MEAN, NUM_WORKERS, PREDICTING_FIELDS, SEED
+from helper.functions import labels_to_onehot
 from helper.segment import Segment
 from helper.transform import Transform
 
@@ -33,10 +33,8 @@ class TrajectoryDataset(Dataset):
     ):
         self.transform = transform
 
-        df_to_encode = dataframe[PREDICTING_FIELDS]
-        encoder = OneHotEncoder(categories=POSSIBLE_VALUES, sparse_output=False)
-        metas = torch.tensor(encoder.fit_transform(df_to_encode), dtype=torch.float32)
-
+        labels = torch.from_numpy(dataframe[PREDICTING_FIELDS].values)
+        metas = labels_to_onehot(labels)
         # print(metas.shape)
         # print(metas)
 
