@@ -38,6 +38,10 @@ POSSIBLE_VALUES = [
 
 NUM_WORKERS = 4
 
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+CHANNELS = ["ax", "ay", "az", "gx", "gy", "gz"]
+
 # === Pre-Computed Values ===
 # Run `helper.pre-compute` to recompute them if needed
 MEAN = torch.Tensor(
