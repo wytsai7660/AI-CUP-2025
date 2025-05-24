@@ -21,17 +21,15 @@ import matplotlib.pyplot as plt
 import os
 import wandb
 from copy import deepcopy
-from sklearn.svm import SVC
-from sklearn.metrics import classification_report, confusion_matrix, accuracy_score, f1_score, roc_auc_score
-
+from sklearn.metrics import classification_report, accuracy_score, f1_score, roc_auc_score
 
 device = "cuda:0"
 model_args = GPTConfig(
-    max_seq_len = 1024,
+    max_seq_len = 200,
     in_chans = 6,
     n_layer = 8,
     n_head = 8,
-    n_embd = 128,
+    n_embd = 64,
     patch_size = 16,
     dropout = 0.2,
     bias = False
@@ -39,25 +37,29 @@ model_args = GPTConfig(
 
 batch_size = 32
 learning_rate = 5e-3
-weight_decay = 0.001
+weight_decay = 0.01
 betas = (0.9, 0.95)
 num_epochs = 500
 
 use_scaler = True
-out_dir = "outs/out27"
-use_wandb = True
+out_dir = "outs/out28"
+use_wandb = False
+
+# play years macro f1 0.41
+# level macro f1 0.50
+# gender macro f1 0.69
 
 PREDICTING_FIELDS = [
-    "gender",
+    # "gender",
     # "hold racket handed",
-    # "play years",
+    "play years",
     # "level",
 ]
 
 POSSIBLE_VALUES = [
-    [1, 2],
     # [1, 2],
-    # [0, 1, 2],
+    # [1, 2],
+    [0, 1, 2],
     # [2, 3, 4, 5],
 ]
 
@@ -76,9 +78,7 @@ wandb_configs = {
     "num_epochs": num_epochs,
     "use_scaler": use_scaler,
     "out_dir": out_dir,
-    "cutoff": 30,
 }
-
 
 print(f"preparing dataset...")
 
@@ -146,6 +146,13 @@ class TrajectoryDataset(Dataset):
             else:
                 self.samples.append((data, None))
         
+        # Calculate class weights for the first predicting field (assumes single field classification)
+        labels = dataframe[PREDICTING_FIELDS[0]].values
+        class_counts = np.array([(labels == v).sum() for v in POSSIBLE_VALUES[0]])
+        class_weights = 1.0 / (class_counts + 1e-8)
+        class_weights = class_weights / class_weights.sum() * len(POSSIBLE_VALUES[0])
+        self.class_weights = torch.tensor(class_weights, dtype=torch.float32)
+        
         if use_scaler and train:
             all_features = np.concatenate(all_features)
             self.scaler = StandardScaler()
@@ -167,32 +174,22 @@ class TrajectoryDataset(Dataset):
         item = self.samples[idx]
         seq = item[0]
         
-        if seq.shape[0] <= self.max_seq_len + self.patch_size:
-            seq = np.pad(seq, ((0, self.max_seq_len + self.patch_size - seq.shape[0]), (0, 0)), mode='constant', constant_values=0)
+        if seq.shape[0] <= self.max_seq_len:
+            seq = np.pad(seq, ((0, self.max_seq_len - seq.shape[0]), (0, 0)), mode='constant', constant_values=0)
             if self.use_scaler:
                 input = torch.tensor(self.scaler.transform(seq[:self.max_seq_len]), dtype=torch.float32)
-                target = torch.tensor(self.scaler.transform(seq[self.patch_size:self.max_seq_len + self.patch_size]), dtype=torch.float32)
             else:
                 input = torch.tensor(seq[:self.max_seq_len], dtype=torch.float32)
-                target = torch.tensor(seq[self.patch_size:self.max_seq_len + self.patch_size], dtype=torch.float32)
             
-            if self.label:
-                return input, target, item[1]
-
-            return input, target
+            return input, item[1]
         
-        segment_start = torch.randint(0, seq.shape[0] - (self.max_seq_len + self.patch_size), (1,)).item()
+        segment_start = torch.randint(0, seq.shape[0] - (self.max_seq_len), (1,)).item()
         if self.use_scaler:
             input = torch.tensor(self.scaler.transform(seq[segment_start:segment_start + self.max_seq_len]), dtype=torch.float32)
-            target = torch.tensor(self.scaler.transform(seq[segment_start + self.patch_size:segment_start + self.max_seq_len + self.patch_size]), dtype=torch.float32)
         else:
             input = seq[segment_start:segment_start + self.max_seq_len].clone().detach()
-            target = seq[segment_start + self.patch_size:segment_start + self.max_seq_len + self.patch_size].clone().detach()
         
-        if self.label:
-            return input, target, item[1]
-        
-        return input, target
+        return input, item[1]
 
 
 df = pd.read_csv(TRAIN_INFO)[TrajectoryDataset.REQUIRED_FIELDS]
@@ -205,27 +202,17 @@ train_player_ids, valid_player_ids = train_test_split(
     # stratify=unique_player[PREDICTING_FIELDS[0]].to_numpy(),
 )
 
-train_df = pd.read_csv(TRAIN_INFO)[TrajectoryDataset.REQUIRED_FIELDS]
-test_df = pd.read_csv(TEST_INFO)[["unique_id"]]
-
 train_dataset = TrajectoryDataset(
     TRAIN_DATA_DIR,
     df[df["player_id"].isin(train_player_ids)],
-    train=True,
     max_seq_len=model_args.max_seq_len,
-    patch_size=model_args.patch_size,
     use_scaler=use_scaler,
-    label=True,
 )
-
 valid_dataset = TrajectoryDataset(
     TRAIN_DATA_DIR,
     df[df["player_id"].isin(valid_player_ids)],
     max_seq_len=model_args.max_seq_len,
-    patch_size=model_args.patch_size,
-    use_scaler=use_scaler,
     scaler=train_dataset.scaler if use_scaler else None,
-    label=True,
 )
 
 train_dataloader = DataLoader(
@@ -241,16 +228,28 @@ valid_dataloader = DataLoader(
     num_workers=8,
 )
 
-input, target, label = next(iter(valid_dataloader))
+input, target = next(iter(valid_dataloader))
+print(f"input shape: {input.shape}")
+print(f"target shape: {target.shape}")
+# exit()
 
-model = GPT(model_args)
-optimizer = model.configure_optimizers(learning_rate=learning_rate, weight_decay=weight_decay, betas=betas, device_type=device)
+
+from alan.rnn_model import SwingGRU
+model = SwingGRU(
+    input_dim=6,
+    d_model=32,
+    output_dim=len(POSSIBLE_VALUES[0]),
+    dropout=0.2,
+    weight=train_dataset.class_weights.to(device),
+)
+
+optimizer = model.configure_optimizers(learning_rate=learning_rate, weight_decay=weight_decay, betas=betas)
 model = model.to(device)
 
 os.makedirs(out_dir, exist_ok=True)
 
-if use_wandb:
-    wandb.init(project="imugpt-experiments", config=wandb_configs)
+best_score = 0.0
+best_model = deepcopy(model.state_dict())
 
 for epoch in range(num_epochs):
     total_train_loss = 0.0
@@ -258,89 +257,88 @@ for epoch in range(num_epochs):
     total_valid_loss = 0.0
     val_seen_items = 0
     
-    all_train_embeddings = []
-    all_valid_embeddings = []
-    all_train_labels = []
-    all_valid_labels = []
     model.train()
+    all_logits = []
+    all_targets = []
     pbar = tqdm(train_dataloader, desc=f"Epoch {epoch+1}/{num_epochs}", leave=False)
-    for i, (input, target, label) in enumerate(pbar):
+    for i, (input, target) in enumerate(pbar):
         input, target = input.to(device), target.to(device)
         optimizer.zero_grad()
-        logits, loss, embedding = model(input, target)
+        logits, loss = model(input, target)
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         optimizer.step()
         total_train_loss += loss.item()
         train_seen_items += input.size(0)
-        all_train_embeddings.append(embedding.detach().cpu().numpy())
-        all_train_labels.append(label.detach().cpu().numpy())
-        if i % 50 == 0 and use_wandb:
-            wandb.log({
-                "train_loss": loss.item(),
-            })
+        all_logits.append(logits.detach().cpu().numpy())
+        all_targets.append(target.detach().cpu().numpy())
+        # if i % 50 == 0 and use_wandb:
+        #     wandb.log({
+        #         "train_loss": loss.item(),
+        #     })
     
+    all_logits = np.concatenate(all_logits)
+    all_targets = np.concatenate(all_targets)
+    
+    all_logits = all_logits.argmax(axis=1)
+    all_targets = all_targets.argmax(axis=1)
+    report = classification_report(
+        all_targets,
+        all_logits,
+        target_names=[str(v) for v in POSSIBLE_VALUES[0]],
+    )
+    # print(report)
+    acc_score = accuracy_score(all_targets, all_logits)
+    f1 = f1_score(all_targets, all_logits, average='macro')
+    # print(f"Accuracy: {acc_score:.4f}, F1 Score: {f1:.4f}")
+        
     print(f"Epoch {epoch+1}/{num_epochs} - Train Loss: {total_train_loss / len(train_dataloader):.4f}")
 
     model.eval()
+    all_logits = []
+    all_targets = []
     pbar = tqdm(valid_dataloader, desc=f"Epoch {epoch+1}/{num_epochs}", leave=False)
     with torch.no_grad():
-        for i, (input, target, label) in enumerate(pbar):
+        for i, (input, target) in enumerate(pbar):
             input, target = input.to(device), target.to(device)
-            logits, loss, embedding = model(input, target)
+            logits, loss = model(input, target)
             total_valid_loss += loss.item()
             val_seen_items += input.size(0)
-            all_valid_embeddings.append(embedding.cpu().numpy())
-            all_valid_labels.append(label.cpu().numpy())
-            
-            if i % 50 == 0 and use_wandb:
-                wandb.log({
-                    "valid_loss": loss.item(),
-                })
+            all_logits.append(logits.cpu().numpy())
+            all_targets.append(target.cpu().numpy())
 
-        if epoch % 50 == 0 or epoch == num_epochs - 1:
-            target = target.cpu().numpy()
-            logits = logits.detach().cpu().numpy()
-            
-            plt.figure(figsize=(12, 8))            
-            for i in range(6):
-                plt.subplot(3, 2, i+1)
-                plt.plot(target[0, :, i], 'b-', label='Ground Truth')
-                plt.plot(logits[0, :, i], 'r-', label='Prediction')
-                plt.title(f'Channel {i+1}')
-                if i == 0:
-                    plt.legend()
-            
-            plt.tight_layout()
-            plt.savefig(f'{out_dir}/prediction_epoch_{epoch+1}.png')
-            plt.close()
     
-    print(f"Epoch {epoch+1}/{num_epochs} - Valid Loss: {total_valid_loss / len(valid_dataloader):.4f}")
     
-    all_train_embeddings = np.concatenate(all_train_embeddings, axis=0)
-    all_train_labels = np.concatenate(all_train_labels, axis=0)
-    all_valid_embeddings = np.concatenate(all_valid_embeddings, axis=0)
-    all_valid_labels = np.concatenate(all_valid_labels, axis=0)
-    all_train_labels = np.argmax(all_train_labels, axis=1)
-    all_valid_labels = np.argmax(all_valid_labels, axis=1)
-    print(all_train_embeddings.shape, all_train_labels.shape)
-    print(all_valid_embeddings.shape, all_valid_labels.shape)
-    print(f"Training SVM on embeddings...")
-    svm = SVC(C=1.0, random_state=42, class_weight='balanced', probability=True)
-    svm.fit(all_train_embeddings, all_train_labels)
-    y_pred = svm.predict(all_valid_embeddings)
-    accuracy = accuracy_score(all_valid_labels, y_pred)
-    f1 = f1_score(all_valid_labels, y_pred, average='macro')
-    report = classification_report(all_valid_labels, y_pred)
-    print(f"Epoch {epoch+1}/{num_epochs} - Validation Accuracy: {accuracy:.4f}, F1 Score: {f1:.4f}")
-    print(report)
-    if use_wandb:
-        wandb.log({
-            # "epoch": epoch + 1,
-            f"{PREDICTING_FIELDS[0]}_accuracy": accuracy,
-            f"f1_{PREDICTING_FIELDS[0]}_score": f1,
-        })
+    all_logits = np.concatenate(all_logits)
+    all_targets = np.concatenate(all_targets)
     
+    roc_auc = roc_auc_score(all_targets, all_logits, multi_class='ovr', average='micro')
+    
+    all_logits = all_logits.argmax(axis=1)
+    all_targets = all_targets.argmax(axis=1)
+
+    report = classification_report(
+        all_targets,
+        all_logits,
+        target_names=[str(v) for v in POSSIBLE_VALUES[0]],
+    )
+    # print(report)
+    acc_score = accuracy_score(all_targets, all_logits)
+    f1 = f1_score(all_targets, all_logits, average='macro')
+    print(f"Accuracy: {acc_score:.4f}, F1 Score: {f1:.4f}, ROC AUC: {roc_auc:.4f}")
+
+    val_loss = total_valid_loss / len(valid_dataloader)
+
+    if f1 > best_score:
+        best_score = f1
+        best_model = deepcopy(model.state_dict())
+        print(f"Best model saved with score: {f1:.4f}, loss: {total_valid_loss / len(valid_dataloader):.4f}")
+        torch.save(model.state_dict(), f"{out_dir}/model_{PREDICTING_FIELDS[0]}_f1{f1:.4f}_roc{roc_auc:.4f}_loss{val_loss:.3f}.pth")
+
+    print(f"Epoch {epoch+1}/{num_epochs} - Valid Loss: {val_loss:.4f}")
+
 if use_wandb:
     wandb.finish()
-torch.save(model.state_dict(), f"{out_dir}/model.pth")
+print(f"Best model saved with score: {best_score:.4f}")
+torch.save(best_model, f"{out_dir}/model_{PREDICTING_FIELDS[0]}_f1{f1:.4f}_roc{roc_auc:.4f}_loss{val_loss:.3f}.pth")
+# torch.save(model.state_dict(), f"{out_dir}/model.pth")

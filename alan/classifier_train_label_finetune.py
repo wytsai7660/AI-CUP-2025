@@ -7,7 +7,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-from config import TRAIN_DATA_DIR, TRAIN_INFO, PREDICTING_FIELDS, POSSIBLE_VALUES, NUM_WORKERS, TEST_INFO, TEST_DATA_DIR
+from config import TRAIN_DATA_DIR, TRAIN_INFO, NUM_WORKERS, TEST_INFO, TEST_DATA_DIR
 from helper.segment import Trim, Segment
 from scipy.signal import detrend
 from scipy.signal import butter, filtfilt
@@ -21,64 +21,49 @@ import matplotlib.pyplot as plt
 import os
 import wandb
 from copy import deepcopy
-from sklearn.svm import SVC
-from sklearn.metrics import classification_report, confusion_matrix, accuracy_score, f1_score, roc_auc_score
+from sklearn.decomposition import PCA
+import matplotlib.colors as mcolors
+from sklearn.metrics import classification_report, accuracy_score, f1_score, roc_auc_score
 
 
-device = "cuda:0"
+
+device = "cuda:1"
 model_args = GPTConfig(
     max_seq_len = 1024,
     in_chans = 6,
     n_layer = 8,
     n_head = 8,
-    n_embd = 128,
+    n_embd = 64,
     patch_size = 16,
     dropout = 0.2,
     bias = False
 )
 
 batch_size = 32
-learning_rate = 5e-3
-weight_decay = 0.001
+learning_rate = 5e-5
+weight_decay = 5e-5
 betas = (0.9, 0.95)
 num_epochs = 500
 
 use_scaler = True
-out_dir = "outs/out27"
-use_wandb = True
+data_dir = "outs/out12"
+use_wandb = False
+
+
 
 PREDICTING_FIELDS = [
-    "gender",
+    # "gender",
     # "hold racket handed",
     # "play years",
-    # "level",
+    "level",
 ]
 
 POSSIBLE_VALUES = [
-    [1, 2],
+    # [1, 2],
     # [1, 2],
     # [0, 1, 2],
-    # [2, 3, 4, 5],
+    [2, 3, 4, 5],
 ]
-
-
-wandb_configs = {
-    "n_embd": model_args.n_embd,
-    "n_layer": model_args.n_layer,
-    "n_head": model_args.n_head,
-    "in_chans": model_args.in_chans,
-    "patch_size": model_args.patch_size,
-    "max_seq_len": model_args.max_seq_len,
-    "batch_size": batch_size,
-    "learning_rate": learning_rate,
-    "weight_decay": weight_decay,
-    "betas": betas,
-    "num_epochs": num_epochs,
-    "use_scaler": use_scaler,
-    "out_dir": out_dir,
-    "cutoff": 30,
-}
-
 
 print(f"preparing dataset...")
 
@@ -109,6 +94,7 @@ class TrajectoryDataset(Dataset):
         self.patch_size = patch_size
         self.label = label
         self.use_scaler = use_scaler
+        self.scaler = scaler
         trim_method = Trim()
 
         if train:
@@ -145,13 +131,18 @@ class TrajectoryDataset(Dataset):
                 self.samples.append((data, meta))
             else:
                 self.samples.append((data, None))
+                
+        labels = dataframe[PREDICTING_FIELDS[0]].values
+        class_counts = np.array([(labels == v).sum() for v in POSSIBLE_VALUES[0]])
+        class_weights = 1.0 / (class_counts + 1e-8)
+        class_weights = class_weights / class_weights.sum() * len(POSSIBLE_VALUES[0])
+        self.class_weights = torch.tensor(class_weights, dtype=torch.float32)
+
         
-        if use_scaler and train:
+        if use_scaler and self.scaler is None:
             all_features = np.concatenate(all_features)
             self.scaler = StandardScaler()
             self.scaler.fit(all_features)
-        else:
-            self.scaler = scaler
     
     @staticmethod
     def butter_lowpass_filter(data, cutoff, fs, order=4):
@@ -202,11 +193,8 @@ train_player_ids, valid_player_ids = train_test_split(
     unique_player["player_id"].to_numpy(),
     test_size=0.2,
     random_state=42,
-    # stratify=unique_player[PREDICTING_FIELDS[0]].to_numpy(),
+    stratify=unique_player[PREDICTING_FIELDS[0]].to_numpy(),
 )
-
-train_df = pd.read_csv(TRAIN_INFO)[TrajectoryDataset.REQUIRED_FIELDS]
-test_df = pd.read_csv(TEST_INFO)[["unique_id"]]
 
 train_dataset = TrajectoryDataset(
     TRAIN_DATA_DIR,
@@ -221,6 +209,7 @@ train_dataset = TrajectoryDataset(
 valid_dataset = TrajectoryDataset(
     TRAIN_DATA_DIR,
     df[df["player_id"].isin(valid_player_ids)],
+    train=True,
     max_seq_len=model_args.max_seq_len,
     patch_size=model_args.patch_size,
     use_scaler=use_scaler,
@@ -241,106 +230,191 @@ valid_dataloader = DataLoader(
     num_workers=8,
 )
 
-input, target, label = next(iter(valid_dataloader))
+# def plot():
+#     pca = PCA(n_components=2)
+#     embedding_2d = pca.fit_transform(all_embedding)
 
-model = GPT(model_args)
-optimizer = model.configure_optimizers(learning_rate=learning_rate, weight_decay=weight_decay, betas=betas, device_type=device)
-model = model.to(device)
 
-os.makedirs(out_dir, exist_ok=True)
+#     import matplotlib.colors as mcolors
+#     bounds = np.array([-0.5, 0.5, 1.5, 2.5, 3.5])
+#     norm = mcolors.BoundaryNorm(bounds, plt.cm.tab10.N)
 
-if use_wandb:
-    wandb.init(project="imugpt-experiments", config=wandb_configs)
+#     plt.figure(figsize=(8, 6))
+#     scatter = plt.scatter(
+#         embedding_2d[:, 0], embedding_2d[:, 1],
+#         c=all_label, cmap='tab10', alpha=0.7, norm=norm # Apply the norm here
+#     )
+#     plt.xlabel('PCA 1')
+#     plt.ylabel('PCA 2')
+#     plt.title('PCA of Embeddings')
 
+#     # Create the colorbar using the same norm and explicitly set the ticks to the actual label values
+#     cbar = plt.colorbar(scatter, ticks=[0, 1, 2, 3])
+#     cbar.set_label('Class')
+#     # No need to set ticks again if they are passed directly to plt.colorbar
+
+#     plt.tight_layout()
+#     plt.savefig("emb_pca.png")
+#     plt.close()
+
+
+
+class GPTClassifier(nn.Module):
+    def __init__(self, model_args: GPTConfig, output_dim: int = 4, weight=None):
+        super().__init__()
+        self.model = GPT(model_args)
+        self.model.load_state_dict(torch.load(f'{data_dir}/model.pth'))
+        
+        for param in self.model.parameters():
+            param.requires_grad = False
+            
+        for block in self.model.transformer.h[-2:]:
+            for param in block.parameters():
+                param.requires_grad = True
+        
+        for param in self.model.transformer.ln_f.parameters():
+            param.requires_grad = True
+
+
+        # self.attention_net = nn.Sequential(
+        #     nn.Linear(model_args.n_embd, model_args.n_embd // 2),
+        #     nn.GELU(),
+        #     nn.Linear(model_args.n_embd // 2, 1),
+        # )
+
+        self.classifier = nn.Sequential(
+            nn.Linear(model_args.n_embd, model_args.n_embd // 2),
+            nn.LayerNorm(model_args.n_embd // 2),
+            nn.GELU(),
+            nn.Dropout(model_args.dropout),
+            nn.Linear(model_args.n_embd // 2, output_dim)
+        )
+        
+        self.criterion = nn.CrossEntropyLoss(weight = weight)
+        
+    def forward(self, x, target=None):
+        x = self.model(x) # (batch_size, seq_len, n_embd)
+        # attention_scores = self.attention_net(x)
+        # attention_weights = F.softmax(attention_scores, dim=1)
+        # x = torch.sum(x * attention_weights, dim=1) # (batch_size, n_embd)
+        x = x[:, 8:, :].mean(dim=1) # (batch_size, n_embd)
+        x = self.classifier(x)
+        if target is None:
+            return x, None
+        else:
+            loss = self.criterion(x, target)
+            return x, loss
+    
+    def configure_optimizers(self, weight_decay, learning_rate, betas):
+        # start with all of the candidate parameters
+        param_dict = {pn: p for pn, p in self.named_parameters()}
+        # filter out those that do not require grad
+        param_dict = {pn: p for pn, p in param_dict.items() if p.requires_grad}
+        # create optim groups. Any parameters that is 2D will be weight decayed, otherwise no.
+        # i.e. all weight tensors in matmuls + embeddings decay, all biases and layernorms don't.
+        decay_params = [p for n, p in param_dict.items() if p.dim() >= 2]
+        nodecay_params = [p for n, p in param_dict.items() if p.dim() < 2]
+        optim_groups = [
+            {'params': decay_params, 'weight_decay': weight_decay},
+            {'params': nodecay_params, 'weight_decay': 0.0}
+        ]
+        num_decay_params = sum(p.numel() for p in decay_params)
+        num_nodecay_params = sum(p.numel() for p in nodecay_params)
+        print(f"num decayed parameter tensors: {len(decay_params)}, with {num_decay_params:,} parameters")
+        print(f"num non-decayed parameter tensors: {len(nodecay_params)}, with {num_nodecay_params:,} parameters")
+        
+        optimizer = torch.optim.AdamW(optim_groups, lr=learning_rate, betas=betas)
+        return optimizer
+
+model = GPTClassifier(model_args, output_dim=len(POSSIBLE_VALUES[0]), weight=train_dataset.class_weights.to(device))
+optimizer = model.configure_optimizers(weight_decay, learning_rate, betas)
+model.to(device)
+# exit(0)
+
+best_score = 0.0
+best_model = None
 for epoch in range(num_epochs):
     total_train_loss = 0.0
     train_seen_items = 0
     total_valid_loss = 0.0
     val_seen_items = 0
     
-    all_train_embeddings = []
-    all_valid_embeddings = []
-    all_train_labels = []
-    all_valid_labels = []
     model.train()
+    all_logits = []
+    all_targets = []
     pbar = tqdm(train_dataloader, desc=f"Epoch {epoch+1}/{num_epochs}", leave=False)
-    for i, (input, target, label) in enumerate(pbar):
+    for i, (input, _, target) in enumerate(pbar):
         input, target = input.to(device), target.to(device)
         optimizer.zero_grad()
-        logits, loss, embedding = model(input, target)
+        logits, loss = model(input, target)
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         optimizer.step()
         total_train_loss += loss.item()
         train_seen_items += input.size(0)
-        all_train_embeddings.append(embedding.detach().cpu().numpy())
-        all_train_labels.append(label.detach().cpu().numpy())
-        if i % 50 == 0 and use_wandb:
-            wandb.log({
-                "train_loss": loss.item(),
-            })
+        all_logits.append(logits.detach().cpu().numpy())
+        all_targets.append(target.detach().cpu().numpy())
+        # if i % 50 == 0 and use_wandb:
+        #     wandb.log({
+        #         "train_loss": loss.item(),
+        #     })
     
+    all_logits = np.concatenate(all_logits)
+    all_targets = np.concatenate(all_targets)
+    
+    all_logits = all_logits.argmax(axis=1)
+    all_targets = all_targets.argmax(axis=1)
+    report = classification_report(
+        all_targets,
+        all_logits,
+        target_names=[str(v) for v in POSSIBLE_VALUES[0]],
+    )
+    # print(report)
+    acc_score = accuracy_score(all_targets, all_logits)
+    f1 = f1_score(all_targets, all_logits, average='macro')
+    # print(f"Accuracy: {acc_score:.4f}, F1 Score: {f1:.4f}")
+        
     print(f"Epoch {epoch+1}/{num_epochs} - Train Loss: {total_train_loss / len(train_dataloader):.4f}")
 
     model.eval()
+    all_logits = []
+    all_targets = []
     pbar = tqdm(valid_dataloader, desc=f"Epoch {epoch+1}/{num_epochs}", leave=False)
     with torch.no_grad():
-        for i, (input, target, label) in enumerate(pbar):
+        for i, (input, _, target) in enumerate(pbar):
             input, target = input.to(device), target.to(device)
-            logits, loss, embedding = model(input, target)
+            logits, loss = model(input, target)
             total_valid_loss += loss.item()
             val_seen_items += input.size(0)
-            all_valid_embeddings.append(embedding.cpu().numpy())
-            all_valid_labels.append(label.cpu().numpy())
-            
-            if i % 50 == 0 and use_wandb:
-                wandb.log({
-                    "valid_loss": loss.item(),
-                })
+            all_logits.append(logits.cpu().numpy())
+            all_targets.append(target.cpu().numpy())
 
-        if epoch % 50 == 0 or epoch == num_epochs - 1:
-            target = target.cpu().numpy()
-            logits = logits.detach().cpu().numpy()
-            
-            plt.figure(figsize=(12, 8))            
-            for i in range(6):
-                plt.subplot(3, 2, i+1)
-                plt.plot(target[0, :, i], 'b-', label='Ground Truth')
-                plt.plot(logits[0, :, i], 'r-', label='Prediction')
-                plt.title(f'Channel {i+1}')
-                if i == 0:
-                    plt.legend()
-            
-            plt.tight_layout()
-            plt.savefig(f'{out_dir}/prediction_epoch_{epoch+1}.png')
-            plt.close()
     
-    print(f"Epoch {epoch+1}/{num_epochs} - Valid Loss: {total_valid_loss / len(valid_dataloader):.4f}")
     
-    all_train_embeddings = np.concatenate(all_train_embeddings, axis=0)
-    all_train_labels = np.concatenate(all_train_labels, axis=0)
-    all_valid_embeddings = np.concatenate(all_valid_embeddings, axis=0)
-    all_valid_labels = np.concatenate(all_valid_labels, axis=0)
-    all_train_labels = np.argmax(all_train_labels, axis=1)
-    all_valid_labels = np.argmax(all_valid_labels, axis=1)
-    print(all_train_embeddings.shape, all_train_labels.shape)
-    print(all_valid_embeddings.shape, all_valid_labels.shape)
-    print(f"Training SVM on embeddings...")
-    svm = SVC(C=1.0, random_state=42, class_weight='balanced', probability=True)
-    svm.fit(all_train_embeddings, all_train_labels)
-    y_pred = svm.predict(all_valid_embeddings)
-    accuracy = accuracy_score(all_valid_labels, y_pred)
-    f1 = f1_score(all_valid_labels, y_pred, average='macro')
-    report = classification_report(all_valid_labels, y_pred)
-    print(f"Epoch {epoch+1}/{num_epochs} - Validation Accuracy: {accuracy:.4f}, F1 Score: {f1:.4f}")
+    all_logits = np.concatenate(all_logits)
+    all_targets = np.concatenate(all_targets)
+    
+    roc_auc = roc_auc_score(all_targets, all_logits, multi_class='ovr', average='micro')
+    
+    all_logits = all_logits.argmax(axis=1)
+    all_targets = all_targets.argmax(axis=1)
+
+    report = classification_report(
+        all_targets,
+        all_logits,
+        target_names=[str(v) for v in POSSIBLE_VALUES[0]],
+    )
     print(report)
-    if use_wandb:
-        wandb.log({
-            # "epoch": epoch + 1,
-            f"{PREDICTING_FIELDS[0]}_accuracy": accuracy,
-            f"f1_{PREDICTING_FIELDS[0]}_score": f1,
-        })
-    
-if use_wandb:
-    wandb.finish()
-torch.save(model.state_dict(), f"{out_dir}/model.pth")
+    acc_score = accuracy_score(all_targets, all_logits)
+    f1 = f1_score(all_targets, all_logits, average='macro')
+    print(f"Accuracy: {acc_score:.4f}, F1 Score: {f1:.4f}, ROC AUC: {roc_auc:.4f}")
+
+    val_loss = total_valid_loss / len(valid_dataloader)
+
+    if f1 > best_score:
+        best_score = f1
+        best_model = deepcopy(model.state_dict())
+        print(f"Best model saved with score: {f1:.4f}, loss: {total_valid_loss / len(valid_dataloader):.4f}")
+        torch.save(model.state_dict(), f"{data_dir}/model_{PREDICTING_FIELDS[0]}_f1{f1:.4f}_roc{roc_auc:.4f}_loss{val_loss:.3f}.pth")
+
+    print(f"Epoch {epoch+1}/{num_epochs} - Valid Loss: {val_loss:.4f}")

@@ -2,7 +2,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
-from torch.optim import lr_scheduler, AdamW
+import math
+import inspect
+from dataclasses import dataclass
 
 
 def get_1d_sincos_pos_embed(embed_dim, grid_size, cls_token=False):
@@ -43,53 +45,6 @@ class PatchEmbed1D(nn.Module):
         x = self.proj(x) # (B, num_patches, embed_dim)
         return x
     
-class IMUGPT(nn.Module):
-    def __init__(self, seq_len=512, patch_size=16, in_chans=6, embed_dim=768, learned_pos_embed=False):
-        super().__init__()
-        self.patch_embed = PatchEmbed1D(seq_len=seq_len, patch_size=patch_size, in_chans=in_chans, embed_dim=embed_dim)
-        self.num_patches = self.patch_embed.num_patches
-        self.patch_size = patch_size
-        self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
-        
-        if self.learned_pos_embed:
-            self.pos_embed = nn.Parameter(torch.zeros(1, self.num_patches + 1, embed_dim))
-            nn.init.trunc_normal_(self.pos_embed, std=0.02)
-        else:
-            pe = get_1d_sincos_pos_embed(embed_dim, self.num_patches, cls_token=True)
-            self.pos_embed = nn.Parameter(torch.tensor(pe, dtype=torch.float32).unsqueeze(0), requires_grad=False)
-        
-        # GPT
-        decoder_layer = nn.TransformerDecoderLayer(
-            d_model=embed_dim, nhead=8,
-            dim_feedforward=embed_dim*4,
-            batch_first=True,
-            norm_first=True, 
-            dropout=0.1,
-            activation='gelu',
-        )
-        self.decoder = nn.TransformerDecoder(decoder_layer, num_layers=4)
-        self.post_norm = nn.LayerNorm(embed_dim)
-        self.emb_dropout = nn.Dropout(0.1)
-        
-        # predict next patch
-        self.decoder_pred = nn.Linear(embed_dim, patch_size * in_chans, bias=True)
-
-"""
-Full definition of a GPT Language Model, all of it in this single file.
-References:
-1) the official GPT-2 TensorFlow implementation released by OpenAI:
-https://github.com/openai/gpt-2/blob/master/src/model.py
-2) huggingface/transformers PyTorch implementation:
-https://github.com/huggingface/transformers/blob/main/src/transformers/models/gpt2/modeling_gpt2.py
-"""
-
-import math
-import inspect
-from dataclasses import dataclass
-
-import torch
-import torch.nn as nn
-from torch.nn import functional as F
 
 class LayerNorm(nn.Module):
     """ LayerNorm but with an optional bias. PyTorch doesn't support simply bias=False """
@@ -183,52 +138,50 @@ class Block(nn.Module):
 
 @dataclass
 class GPTConfig:
-    block_size: int = (512 // 16) # 512 is the sequence length, 16 is the patch size
-    in_chans: int = 6 # number of input channels (e.g. 6 for IMU data)
+    max_seq_len: int = 512
+    in_chans: int = 6
     n_layer: int = 4
     n_head: int = 8
     n_embd: int = 192
     patch_size: int = 16
     dropout: float = 0.0
-    bias: bool = True # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
+    bias: bool = True
+    
+    def __init__(self, **kwargs):
+        for k, v in kwargs.items():
+            if hasattr(self, k):
+                setattr(self, k, v)
+        
+        self.block_size = self.max_seq_len // self.patch_size
+
 
 class GPT(nn.Module):
 
-    def __init__(self, config):
+    def __init__(self, config, class_weights=None):
         super().__init__()
-        # assert config.vocab_size is not None
         assert config.block_size is not None
         self.config = config
+        self.class_weights = class_weights
+        self.train_classifier = class_weights is not None
         
-        # if config.learned_pos_embed:
-        #     self.pos_embed = nn.Parameter(torch.zeros(1, self.num_patches + 1, config.n_embd))
-        # else:
-        #     pe = get_1d_sincos_pos_embed(config.n_embd, self.num_patches, cls_token=False)
-        #     self.pos_embed = nn.Parameter(torch.tensor(pe, dtype=torch.float32).unsqueeze(0), requires_grad=False)
-
         self.cls_token = nn.Parameter(torch.zeros(1, 1, config.n_embd))
         self.transformer = nn.ModuleDict(dict(
-            wte = PatchEmbed1D(seq_len=config.block_size, patch_size=config.patch_size, in_chans=config.in_chans, embed_dim=config.n_embd),
+            wte = PatchEmbed1D(seq_len=config.max_seq_len, patch_size=config.patch_size, in_chans=config.in_chans, embed_dim=config.n_embd),
             wpe = nn.Embedding(config.block_size + 1, config.n_embd),
             drop = nn.Dropout(config.dropout),
             h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
             ln_f = LayerNorm(config.n_embd, bias=config.bias),
         ))
+        
         self.predict_head = nn.Linear(config.n_embd, config.patch_size * config.in_chans, bias=False)
-        # self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
-        # with weight tying when using torch.compile() some warnings get generated:
-        # "UserWarning: functional_call was passed multiple values for tied weights.
-        # This behavior is deprecated and will be an error in future versions"
-        # not 100% sure what this is, so far seems to be harmless. TODO investigate
-        # self.transformer.wte.weight = self.lm_head.weight # https://paperswithcode.com/method/weight-tying
-
+        
         # init all weights
         self.apply(self._init_weights)
         # apply special scaled init to the residual projections, per GPT-2 paper
         for pn, p in self.named_parameters():
             if pn.endswith('c_proj.weight'):
                 torch.nn.init.normal_(p, mean=0.0, std=0.02/math.sqrt(2 * config.n_layer))
-
+        
         # report number of parameters
         print("number of parameters: %.2fM" % (self.get_num_params()/1e6,))
 
@@ -243,6 +196,7 @@ class GPT(nn.Module):
         if non_embedding:
             n_params -= self.transformer.wpe.weight.numel()
         return n_params
+    
 
     def _init_weights(self, module):
         if isinstance(module, nn.Linear):
@@ -272,24 +226,19 @@ class GPT(nn.Module):
         
         cls_repr = x[:, 0]  # (B, n_embd)
         x = x[:, 1:]        # (B, T, n_embd)
-
-        if targets is not None:
-            # if we are given some desired targets also calculate the loss
-            logits = self.predict_head(x) # (b, t, patch_size * in_chans)
-            targets = targets.permute(0, 2, 1)
-            targets = targets.unfold(dimension=2, size=16, step=16) # (B, C, num_patches, patch_size)
-            targets = targets.permute(0, 2, 1, 3)
-            targets = targets.reshape(b, targets.size(1), -1) # (B, num_patches, in_chans * patch_size)
-
-            # target shape (b, T, in_chans)
-            loss = F.mse_loss(logits, targets)
-            # loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
+        # 16 * 8 = 128
+        if targets is None:
+            # return torch.mean(x, dim=1)
+            return x
         else:
-            # inference-time mini-optimization: only forward the lm_head on the very last position
-            logits = self.predict_head(x[:, [-1], :]) # note: using list [-1] to preserve the time dim
-            loss = None
-
-        return logits, loss
+            logits = self.predict_head(x) # (b, t, patch_size * in_chans)
+            logits = logits.view(b, t, self.config.in_chans, self.config.patch_size)
+            logits = logits.permute(0, 2, 1, 3)
+            logits = logits.contiguous()
+            logits = logits.view(b, self.config.in_chans, -1)
+            logits = logits.permute(0, 2, 1) # (bsz, seqlen * patch_size, n_channel)
+            loss = F.mse_loss(logits, targets)
+            return logits, loss, torch.mean(x, dim=1)
 
 
     def configure_optimizers(self, weight_decay, learning_rate, betas, device_type):
@@ -330,36 +279,10 @@ class GPT(nn.Module):
         flops_per_iter = flops_per_fwdbwd * fwdbwd_per_iter
         # express our flops throughput as ratio of A100 bfloat16 peak flops
         flops_achieved = flops_per_iter * (1.0/dt) # per second
-        flops_promised = 312e12 # A100 GPU bfloat16 peak flops is 312 TFLOPS
+        flops_promised = 35e12 # 3093 GPU float32 peak flops
         mfu = flops_achieved / flops_promised
         return mfu
 
-    @torch.no_grad()
-    def generate(self, idx, max_new_tokens, temperature=1.0, top_k=None):
-        """
-        Take a conditioning sequence of indices idx (LongTensor of shape (b,t)) and complete
-        the sequence max_new_tokens times, feeding the predictions back into the model each time.
-        Most likely you'll want to make sure to be in model.eval() mode of operation for this.
-        """
-        for _ in range(max_new_tokens):
-            # if the sequence context is growing too long we must crop it at block_size
-            idx_cond = idx if idx.size(1) <= self.config.block_size else idx[:, -self.config.block_size:]
-            # forward the model to get the logits for the index in the sequence
-            logits, _ = self(idx_cond)
-            # pluck the logits at the final step and scale by desired temperature
-            logits = logits[:, -1, :] / temperature
-            # optionally crop the logits to only the top k options
-            if top_k is not None:
-                v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
-                logits[logits < v[:, [-1]]] = -float('Inf')
-            # apply softmax to convert logits to (normalized) probabilities
-            probs = F.softmax(logits, dim=-1)
-            # sample from the distribution
-            idx_next = torch.multinomial(probs, num_samples=1)
-            # append sampled index to the running sequence and continue
-            idx = torch.cat((idx, idx_next), dim=1)
-
-        return idx
     
 if __name__ == "__main__":
     # Example usage

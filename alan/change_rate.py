@@ -7,7 +7,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-from config import TRAIN_DATA_DIR, TRAIN_INFO, PREDICTING_FIELDS, POSSIBLE_VALUES, NUM_WORKERS, TEST_INFO, TEST_DATA_DIR
+from config import TRAIN_DATA_DIR, TRAIN_INFO, NUM_WORKERS, TEST_INFO, TEST_DATA_DIR
 from helper.segment import Trim, Segment
 from scipy.signal import detrend
 from scipy.signal import butter, filtfilt
@@ -21,8 +21,8 @@ import matplotlib.pyplot as plt
 import os
 import wandb
 from copy import deepcopy
-from sklearn.svm import SVC
-from sklearn.metrics import classification_report, confusion_matrix, accuracy_score, f1_score, roc_auc_score
+from sklearn.decomposition import PCA
+import matplotlib.colors as mcolors
 
 
 device = "cuda:0"
@@ -32,53 +32,27 @@ model_args = GPTConfig(
     n_layer = 8,
     n_head = 8,
     n_embd = 128,
-    patch_size = 16,
+    patch_size = 8,
     dropout = 0.2,
     bias = False
 )
 
-batch_size = 32
-learning_rate = 5e-3
-weight_decay = 0.001
-betas = (0.9, 0.95)
-num_epochs = 500
+data_dir = "outs/out23"
 
-use_scaler = True
-out_dir = "outs/out27"
-use_wandb = True
 
 PREDICTING_FIELDS = [
-    "gender",
+    # "gender",
     # "hold racket handed",
     # "play years",
-    # "level",
+    "level",
 ]
 
 POSSIBLE_VALUES = [
-    [1, 2],
+    # [1, 2],
     # [1, 2],
     # [0, 1, 2],
-    # [2, 3, 4, 5],
+    [2, 3, 4, 5],
 ]
-
-
-wandb_configs = {
-    "n_embd": model_args.n_embd,
-    "n_layer": model_args.n_layer,
-    "n_head": model_args.n_head,
-    "in_chans": model_args.in_chans,
-    "patch_size": model_args.patch_size,
-    "max_seq_len": model_args.max_seq_len,
-    "batch_size": batch_size,
-    "learning_rate": learning_rate,
-    "weight_decay": weight_decay,
-    "betas": betas,
-    "num_epochs": num_epochs,
-    "use_scaler": use_scaler,
-    "out_dir": out_dir,
-    "cutoff": 30,
-}
-
 
 print(f"preparing dataset...")
 
@@ -109,6 +83,7 @@ class TrajectoryDataset(Dataset):
         self.patch_size = patch_size
         self.label = label
         self.use_scaler = use_scaler
+        self.scaler = scaler
         trim_method = Trim()
 
         if train:
@@ -146,12 +121,10 @@ class TrajectoryDataset(Dataset):
             else:
                 self.samples.append((data, None))
         
-        if use_scaler and train:
+        if use_scaler and self.scaler is None:
             all_features = np.concatenate(all_features)
             self.scaler = StandardScaler()
             self.scaler.fit(all_features)
-        else:
-            self.scaler = scaler
     
     @staticmethod
     def butter_lowpass_filter(data, cutoff, fs, order=4):
@@ -194,7 +167,6 @@ class TrajectoryDataset(Dataset):
         
         return input, target
 
-
 df = pd.read_csv(TRAIN_INFO)[TrajectoryDataset.REQUIRED_FIELDS]
 unique_player = df.drop_duplicates(subset=["player_id"])
 
@@ -205,142 +177,72 @@ train_player_ids, valid_player_ids = train_test_split(
     # stratify=unique_player[PREDICTING_FIELDS[0]].to_numpy(),
 )
 
-train_df = pd.read_csv(TRAIN_INFO)[TrajectoryDataset.REQUIRED_FIELDS]
-test_df = pd.read_csv(TEST_INFO)[["unique_id"]]
-
 train_dataset = TrajectoryDataset(
     TRAIN_DATA_DIR,
     df[df["player_id"].isin(train_player_ids)],
     train=True,
     max_seq_len=model_args.max_seq_len,
     patch_size=model_args.patch_size,
-    use_scaler=use_scaler,
+    use_scaler=True,
     label=True,
 )
 
 valid_dataset = TrajectoryDataset(
     TRAIN_DATA_DIR,
     df[df["player_id"].isin(valid_player_ids)],
+    train=True,
     max_seq_len=model_args.max_seq_len,
     patch_size=model_args.patch_size,
-    use_scaler=use_scaler,
-    scaler=train_dataset.scaler if use_scaler else None,
+    use_scaler=True,
+    scaler=train_dataset.scaler,
     label=True,
 )
 
-train_dataloader = DataLoader(
-    train_dataset,
-    batch_size=batch_size,
-    shuffle=True,
-    num_workers=8,
-)
-valid_dataloader = DataLoader(
-    valid_dataset,
-    batch_size=batch_size,
-    shuffle=False,
-    num_workers=8,
-)
-
-input, target, label = next(iter(valid_dataloader))
-
 model = GPT(model_args)
-optimizer = model.configure_optimizers(learning_rate=learning_rate, weight_decay=weight_decay, betas=betas, device_type=device)
+model.load_state_dict(torch.load(f'{data_dir}/model.pth'))
 model = model.to(device)
+model.eval()
 
-os.makedirs(out_dir, exist_ok=True)
+from sklearn.svm import SVC
+from sklearn.metrics import classification_report, confusion_matrix, accuracy_score, f1_score, roc_auc_score
+import joblib
 
-if use_wandb:
-    wandb.init(project="imugpt-experiments", config=wandb_configs)
 
-for epoch in range(num_epochs):
-    total_train_loss = 0.0
-    train_seen_items = 0
-    total_valid_loss = 0.0
-    val_seen_items = 0
-    
-    all_train_embeddings = []
-    all_valid_embeddings = []
-    all_train_labels = []
-    all_valid_labels = []
-    model.train()
-    pbar = tqdm(train_dataloader, desc=f"Epoch {epoch+1}/{num_epochs}", leave=False)
-    for i, (input, target, label) in enumerate(pbar):
-        input, target = input.to(device), target.to(device)
-        optimizer.zero_grad()
-        logits, loss, embedding = model(input, target)
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-        optimizer.step()
-        total_train_loss += loss.item()
-        train_seen_items += input.size(0)
-        all_train_embeddings.append(embedding.detach().cpu().numpy())
-        all_train_labels.append(label.detach().cpu().numpy())
-        if i % 50 == 0 and use_wandb:
-            wandb.log({
-                "train_loss": loss.item(),
-            })
-    
-    print(f"Epoch {epoch+1}/{num_epochs} - Train Loss: {total_train_loss / len(train_dataloader):.4f}")
+svm: SVC = joblib.load(f"{data_dir}/svm_model.joblib")
+for i in range(len(valid_dataset)):
+    data, meta = valid_dataset.samples[i]
+    if meta[1] == 1:  # only use level 2
+        break
+print(meta)
+# data, meta = valid_dataset.samples[250]
+data = train_dataset.scaler.transform(data)
+# data = torch.tensor(data, dtype=torch.float32)
+print(f"data shape: {data.shape}, meta shape: {meta.shape}")
 
-    model.eval()
-    pbar = tqdm(valid_dataloader, desc=f"Epoch {epoch+1}/{num_epochs}", leave=False)
-    with torch.no_grad():
-        for i, (input, target, label) in enumerate(pbar):
-            input, target = input.to(device), target.to(device)
-            logits, loss, embedding = model(input, target)
-            total_valid_loss += loss.item()
-            val_seen_items += input.size(0)
-            all_valid_embeddings.append(embedding.cpu().numpy())
-            all_valid_labels.append(label.cpu().numpy())
-            
-            if i % 50 == 0 and use_wandb:
-                wandb.log({
-                    "valid_loss": loss.item(),
-                })
+all_embedding = []
+for start in range(0, data.shape[0] - model_args.max_seq_len):
+    segment = torch.tensor(data[start:start + model_args.max_seq_len], dtype=torch.float32)
+    # if segment.shape[0] < model_args.max_seq_len:
+    #     continue
+    segment = segment.unsqueeze(0).to(device)
+    embedding = model(segment)
+    embedding = torch.mean(embedding, dim=1).detach().cpu().numpy()
+    all_embedding.append(embedding)
+    
+all_embedding = np.concatenate(all_embedding)
+print(f"all_embedding shape: {all_embedding.shape}")
+label = meta.argmax().item()
+print(f"label: {label}")
+probs = svm.predict_proba(all_embedding)
 
-        if epoch % 50 == 0 or epoch == num_epochs - 1:
-            target = target.cpu().numpy()
-            logits = logits.detach().cpu().numpy()
-            
-            plt.figure(figsize=(12, 8))            
-            for i in range(6):
-                plt.subplot(3, 2, i+1)
-                plt.plot(target[0, :, i], 'b-', label='Ground Truth')
-                plt.plot(logits[0, :, i], 'r-', label='Prediction')
-                plt.title(f'Channel {i+1}')
-                if i == 0:
-                    plt.legend()
-            
-            plt.tight_layout()
-            plt.savefig(f'{out_dir}/prediction_epoch_{epoch+1}.png')
-            plt.close()
-    
-    print(f"Epoch {epoch+1}/{num_epochs} - Valid Loss: {total_valid_loss / len(valid_dataloader):.4f}")
-    
-    all_train_embeddings = np.concatenate(all_train_embeddings, axis=0)
-    all_train_labels = np.concatenate(all_train_labels, axis=0)
-    all_valid_embeddings = np.concatenate(all_valid_embeddings, axis=0)
-    all_valid_labels = np.concatenate(all_valid_labels, axis=0)
-    all_train_labels = np.argmax(all_train_labels, axis=1)
-    all_valid_labels = np.argmax(all_valid_labels, axis=1)
-    print(all_train_embeddings.shape, all_train_labels.shape)
-    print(all_valid_embeddings.shape, all_valid_labels.shape)
-    print(f"Training SVM on embeddings...")
-    svm = SVC(C=1.0, random_state=42, class_weight='balanced', probability=True)
-    svm.fit(all_train_embeddings, all_train_labels)
-    y_pred = svm.predict(all_valid_embeddings)
-    accuracy = accuracy_score(all_valid_labels, y_pred)
-    f1 = f1_score(all_valid_labels, y_pred, average='macro')
-    report = classification_report(all_valid_labels, y_pred)
-    print(f"Epoch {epoch+1}/{num_epochs} - Validation Accuracy: {accuracy:.4f}, F1 Score: {f1:.4f}")
-    print(report)
-    if use_wandb:
-        wandb.log({
-            # "epoch": epoch + 1,
-            f"{PREDICTING_FIELDS[0]}_accuracy": accuracy,
-            f"f1_{PREDICTING_FIELDS[0]}_score": f1,
-        })
-    
-if use_wandb:
-    wandb.finish()
-torch.save(model.state_dict(), f"{out_dir}/model.pth")
+plt.figure(figsize=(12, 6))
+for i in range(probs.shape[1]):
+    plt.plot(probs[:, i], label=f'Class {i}')
+plt.xlabel('Segment (T)')
+plt.ylabel('Predicted Probability')
+plt.title('SVM Predicted Probabilities, ground Truth: ' + str(label))
+plt.legend()
+plt.tight_layout()
+plt.savefig("segment_probs.png")
+plt.close()
+
