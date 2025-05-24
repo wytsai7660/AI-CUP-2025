@@ -1,13 +1,14 @@
 from pathlib import Path
 from typing import List, Tuple
 
+import numpy as np
 import pandas as pd
 import torch
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import OneHotEncoder
 from torch.utils.data import DataLoader, Dataset
 
-from config import MEAN, NUM_WORKERS, POSSIBLE_VALUES, PREDICTING_FIELDS, SEED
+from config import MEAN, NUM_WORKERS, PREDICTING_FIELDS, SEED
+from helper.functions import labels_to_onehot
 from helper.segment import Segment
 from helper.transform import Transform
 
@@ -19,12 +20,7 @@ class TrajectoryDataset(Dataset):
     每筆 item 回傳 (segment, meta)，皆為 torch.Tensor:
     - seg  : shape=(L, 6), dtype=torch.float32
     - meta : one-hot vector for [gender, hand, years, level], dtype=torch.float32
-
-    Note:
-    - dataframe: should contain columns `['unique_id', 'player_id'] + PREDICTING_FIELDS`
     """
-
-    REQUIRED_FIELDS = ["unique_id", "player_id"] + PREDICTING_FIELDS
 
     def __init__(
         self,
@@ -37,29 +33,21 @@ class TrajectoryDataset(Dataset):
     ):
         self.transform = transform
 
-        df_to_encode = dataframe[PREDICTING_FIELDS]
-        encoder = OneHotEncoder(categories=POSSIBLE_VALUES, sparse_output=False)
-        metas = torch.tensor(encoder.fit_transform(df_to_encode), dtype=torch.float32)
-
+        labels = torch.from_numpy(dataframe[PREDICTING_FIELDS].values)
+        metas = labels_to_onehot(labels)
         # print(metas.shape)
         # print(metas)
 
         self.samples: List[Tuple[torch.Tensor, torch.Tensor]] = []
-        fpaths = [
-            data_dir / f"{unique_id}.txt" for unique_id in dataframe["unique_id"].values
-        ]
+        fpaths = [data_dir / f"{id}.txt" for id in dataframe["unique_id"].values]
         for fpath, meta in zip(fpaths, metas):
-            data = torch.tensor(
-                pd.read_csv(fpath, sep=r"\s+", header=None).values, dtype=torch.float32
-            )
-            if segment:
-                for seg in segment(data):
-                    duration = seg.shape[0]
-                    if duration < min_duration or duration > max_duration:
-                        continue
-                    self.samples.append((seg, meta))
-            else:
-                self.samples.append((data, meta))
+            data = torch.from_numpy(np.loadtxt(fpath)).float()
+            segs = segment(data) if segment else [data]
+            self.samples += [
+                (seg, meta)
+                for seg in segs
+                if min_duration <= seg.shape[0] <= max_duration
+            ]
 
     def __len__(self):
         return len(self.samples)
@@ -136,7 +124,7 @@ def get_train_valid_dataloader(
     - Stratified splitting is used based on the `split_target` column to maintain class distribution.
     """
 
-    df = pd.read_csv(info_csv)[TrajectoryDataset.REQUIRED_FIELDS]
+    df = pd.read_csv(info_csv)
     unique_player = df.drop_duplicates(subset=["player_id"])
 
     train_player_ids, valid_player_ids = train_test_split(

@@ -1,12 +1,13 @@
 import warnings
 from abc import ABC, abstractmethod
 from typing import List
+from collections import Counter
 
 import numpy as np
 import ruptures as rpt
 import torch
 from scipy.ndimage import uniform_filter1d
-from scipy.signal import butter, detrend, filtfilt, find_peaks
+from scipy.signal import butter, detrend, filtfilt, find_peaks, lfilter
 from sklearn.preprocessing import MinMaxScaler
 
 """
@@ -265,7 +266,110 @@ class IntergratedSplit(Segment):
 
         return segs
 
+class HMM(Segment):
+    
+    def __init__(
+        self,
+        n_state: int = 4,
+        random_state: int = 42,
+        freq_cutoff: float = 30,
+        sample_rate: float = 85,
+    ):
+        from hmmlearn import hmm
 
+        self.n_state = n_state
+        self.random_state = random_state
+        self.freq_cutoff = freq_cutoff
+        self.sample_rate = sample_rate
+        
+    def analyze_state_segments(self, state_seq, data_seq):
+        state_seq = np.array(state_seq)
+        data_seq = np.array(data_seq)
+
+        segments = []
+        start = 0
+        for i in range(1, len(state_seq)):
+            if state_seq[i] != state_seq[i - 1]:
+                segments.append((state_seq[i - 1], start, i - 1))
+                start = i
+        segments.append((state_seq[-1], start, len(state_seq) - 1))
+
+        state_to_values = {}
+        for state, start, end in segments:
+            segment_mean = data_seq[start:end+1].mean()
+            if state not in state_to_values:
+                state_to_values[state] = []
+            state_to_values[state].append(segment_mean)
+
+        state_avg = {state: np.mean(values) for state, values in state_to_values.items()}
+        
+        best_state = max(state_avg.items(), key=lambda x: x[1])[0]
+
+        return segments, best_state
+    
+    def most_common_trigram_span(self, segments, best_state):
+        state_seq = [seg[0] for seg in segments]
+        trigram_data = []
+
+        for i in range(len(state_seq) - 2):
+            trigram = tuple(state_seq[i:i+3])
+            if trigram[1] == best_state:
+                seg_triplet = segments[i:i+3]
+                trigram_data.append((trigram, seg_triplet))
+
+        if not trigram_data:
+            return None, [], 0
+
+        counter = Counter([item[0] for item in trigram_data])
+        most_common_trigram, count = counter.most_common(1)[0]
+
+        spans = []
+        for trig, segs in trigram_data:
+            if trig == most_common_trigram:
+                start = segs[0][1]
+                end = segs[2][2]
+                spans.append((start, end))
+
+        return most_common_trigram, spans, count
+
+        
+    def __call__(self, data: torch.Tensor) -> List[torch.Tensor]:
+        data = detrend(data.numpy(), axis=0)
+        T = len(data)
+        
+        normal_cutoff = self.freq_cutoff / (0.5 * self.sample_rate)
+        b, a = butter(2, normal_cutoff, btype='low', analog=False)
+        filtered_data = np.zeros_like(data)
+        for i in range(6):
+            filtered_data[:, i] = lfilter(b, a, data[:, i])
+            
+        acc_magnitude = np.sqrt(filtered_data[:, 0]**2 + filtered_data[:, 1]**2 + filtered_data[:, 2]**2)
+        gyro_magnitude = np.sqrt(filtered_data[:, 3]**2 + filtered_data[:, 4]**2 + filtered_data[:, 5]**2)
+        features = np.column_stack((filtered_data, acc_magnitude, gyro_magnitude))
+        scaler = MinMaxScaler()
+        features = scaler.fit_transform(features)
+        
+        model = hmm.GaussianHMM(
+            n_components=self.n_state,
+            covariance_type="full",
+            random_state=self.random_state,
+            n_iter=100,
+        )
+        model.fit(features)
+        logprob, states = model.decode(features, algorithm="viterbi")
+        
+        segments, best_state = self.analyze_state_segments(states, acc_magnitude)
+        most_common_trigram, spans, count = self.most_common_trigram_span(segments, best_state)
+        
+        segs = []
+        for start, end in spans:
+            segs.append(data[start:end])
+        return segs
+
+
+
+        
+        
 # class cut_by_hmm(cut_method):
 #     """
 #     HMM（Hidden Markov Model）：把每个时刻的传感器特征看成观测，隐藏状态分成「静止／运动」两类，利用 HMM 来解码状态序列并提取连续的运动段

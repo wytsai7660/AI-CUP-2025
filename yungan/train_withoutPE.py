@@ -33,9 +33,9 @@ def normalize(x):
 def main():
 # training parameters
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-    epochs = 100
+    epochs = 40
     learning_rate = 0.0001
-    train_bathch_size = 32
+    train_bathch_size = 16
 
     # data path and weight path
     base_path = os.path.dirname(os.path.abspath(__file__))
@@ -49,27 +49,27 @@ def main():
     train_loader, valid_loader = get_train_valid_dataloader(
         TRAIN_DATA_DIR,
         TRAIN_INFO,
-        split_target="gender",
+        split_target="level",
         batch_size=train_bathch_size,
         segment=Yungan(),
         max_duration = 500,
-        train_transform=Compose(
-            [
-                Normalize(mean=MEAN, std=STD),
-            ]
-        ),
-        valid_transform=Compose(
-            [
-                Normalize(mean=MEAN, std=STD),
-            ]
-        ),
+        # train_transform=Compose(
+        #     [
+        #         Normalize(mean=MEAN, std=STD),
+        #     ]
+        # ),
+        # valid_transform=Compose(
+        #     [
+        #         Normalize(mean=MEAN, std=STD),
+        #     ]
+        # ),
     )
     # model
-    model = EncoderOnlyClassifier(d_model=6, n_enc=9, dim_ff=256)
+    model = EncoderOnlyClassifier(d_model=6, n_enc=6, dim_ff=256)
     model = model.to(device)
 
     # set optimizer and loss function
-    class_weight = class_weights(TRAIN_INFO, device)
+    # class_weight = class_weights(TRAIN_INFO, device)
     # criterion = torch.hub.load(
     #     "adeelh/pytorch-multi-class-focal-loss",
     #     model="FocalLoss",
@@ -77,56 +77,30 @@ def main():
     #     gamma=FOCAL_LOSS_GAMMA,            # 焦点参数
     #     reduction="mean",
     # )
-    w = class_weight
-    criterion_list = [
-        torch.hub.load(
-            "adeelh/pytorch-multi-class-focal-loss",
-            model="FocalLoss",
-            alpha=w[0:2], gamma=FOCAL_LOSS_GAMMA,
-            reduction="mean"
-        ),  # gender: 2 类
-        torch.hub.load(
-            "adeelh/pytorch-multi-class-focal-loss",
-            model="FocalLoss",
-            alpha=w[2:4], gamma=FOCAL_LOSS_GAMMA,
-            reduction="mean"
-        ),  # hold-handed: 2 类
-        torch.hub.load(
-            "adeelh/pytorch-multi-class-focal-loss",
-            model="FocalLoss",
-            alpha=w[4:7], gamma=FOCAL_LOSS_GAMMA,
-            reduction="mean"
-        ),  # play‐years: 3 类
-        torch.hub.load(
-            "adeelh/pytorch-multi-class-focal-loss",
-            model="FocalLoss",
-            alpha=w[7:11], gamma=FOCAL_LOSS_GAMMA,
-            reduction="mean"
-        ),  # level: 4 类
-    ]
-    
-    # criterion = nn.CrossEntropyLoss()
-    decay, no_decay = [], []
-    for name, param in model.named_parameters():
-        if not param.requires_grad:
-            continue
-        if name.endswith("bias") or "norm" in name:
-            no_decay.append(param)
-        else:
-            decay.append(param)
+     
+    criterion = nn.CrossEntropyLoss()
+    # decay, no_decay = [], []
+    # for name, param in model.named_parameters():
+    #     if not param.requires_grad:
+    #         continue
+    #     if name.endswith("bias") or "norm" in name:
+    #         no_decay.append(param)
+    #     else:
+    #         decay.append(param)
 
-    optimizer = torch.optim.AdamW(
-        [{"params": decay,    "weight_decay": 1e-3},
-        {"params": no_decay, "weight_decay": 0.0}],
-        lr=learning_rate
-    )
-    # optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate,weight_decay=1e-5)
-    scheduler = get_linear_warmup_cosine_scheduler(
-        optimizer=optimizer,
-        epochs=epochs,
-        train_loader_len=len(train_loader),
-        warmup_ratio=0.1
-    )
+    # optimizer = torch.optim.AdamW(
+    #     [{"params": decay,    "weight_decay": 1e-3},
+    #     {"params": no_decay, "weight_decay": 0.0}],
+    #     lr=learning_rate
+    # )
+    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate,weight_decay=1e-4)
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=7, gamma=0.1)
+    # scheduler = get_linear_warmup_cosine_scheduler(
+    #     optimizer=optimizer,
+    #     epochs=epochs,
+    #     train_loader_len=len(train_loader),
+    #     warmup_ratio=0.1
+    # )
 
     # train
     train_loss_list = list()
@@ -154,8 +128,8 @@ def main():
         valid_samples = 0
 
         model.train()
-        for src, _, label_onehot in tqdm(train_loader, desc="Training"):
-            src, label_onehot = src.to(device), label_onehot.to(device)
+        for src, tgt, label_onehot in tqdm(train_loader, desc="Training"):
+            src, tgt, label_onehot = src.to(device), tgt.to(device), label_onehot.to(device)
 
             # src, tgt: (batch_size, seq_len, 6)
             src = src.permute(1, 0, 2) # => (seq_len, batch_size, 6) 
@@ -168,7 +142,7 @@ def main():
             for i, (start, end) in enumerate([(0,2), (2,4), (4,7), (7,11)]):
                 logits_group = output[:, start:end]                # [B, group_size]
                 targets_group = label_onehot[:, start:end].argmax(dim=1)  # [B]
-                loss += criterion_list[i](logits_group, targets_group)     # 累加每组 loss
+                loss += criterion(logits_group, targets_group)     # 累加每组 loss
 
                 preds_group = logits_group.argmax(dim=1)           # [B]
                 train_correct += (preds_group == targets_group).sum().item()
@@ -200,7 +174,7 @@ def main():
                     cur_B = logits_group.size(0)                    # 真正的 batch 大小
 
                     # 累加加权 loss
-                    valid_loss    += criterion_list[i](logits_group, targets_group).item() * cur_B
+                    valid_loss    += criterion(logits_group, targets_group).item() * cur_B
                     # 累加正确数
                     valid_correct += (logits_group.argmax(dim=1) == targets_group).sum().item()
                     # 累加样本数（按四段算，所以会加四次 cur_B）
