@@ -6,6 +6,7 @@ import pandas as pd
 import torch
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader, Dataset
+from tqdm import tqdm
 
 from config import MEAN, NUM_WORKERS, PREDICTING_FIELDS, SEED
 from helper.functions import labels_to_onehot
@@ -40,7 +41,9 @@ class TrajectoryDataset(Dataset):
 
         self.samples: List[Tuple[torch.Tensor, torch.Tensor]] = []
         fpaths = [data_dir / f"{id}.txt" for id in dataframe["unique_id"].values]
-        for fpath, meta in zip(fpaths, metas):
+        for fpath, meta in tqdm(
+            zip(fpaths, metas), desc="Loading Data", total=len(fpaths)
+        ):
             data = torch.from_numpy(np.loadtxt(fpath)).float()
             segs = segment(data) if segment else [data]
             self.samples += [
