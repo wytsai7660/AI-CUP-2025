@@ -185,3 +185,4 @@ Loss_curve.png
 Training_accuracy.png
 
 .vscode/
+wandb/
