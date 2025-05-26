@@ -21,12 +21,15 @@ def svm_evaluate(model, dataset):
     all_embeddings = []
     all_labels = []
     
-    dataloader = DataLoader(dataset, batch_size=128, shuffle=False, pin_memory=True)
+    dataloader = DataLoader(dataset, batch_size=128, num_workers=4, shuffle=False, pin_memory=True)
     
     with torch.no_grad():
         for input, _, label in tqdm(dataloader, desc="Extracting SVM embeddings", leave=False):
-            input = input.to(device)
-            embedding = model(input)
+            input, label_cu = input.to(device), label.to(device)
+            if model_args.enable_mode_embedding:
+                embedding = model(input, mode=label_cu[:, 0])
+            else:
+                embedding = model(input)
             embedding = torch.mean(embedding, dim=1).detach().cpu().numpy()
             all_embeddings.append(embedding)
             all_labels.append(label.numpy())
@@ -112,9 +115,11 @@ model_args = GPTConfig(
     n_layer = 8,
     n_head = 8,
     n_embd = 128,
-    patch_size = 16,
+    ff = 4,
+    patch_size = 8,
     dropout = 0.2,
-    bias = False
+    bias = False,
+    enable_mode_embedding = False,
 )
 
 batch_size = 32
@@ -124,21 +129,27 @@ betas = (0.9, 0.95)
 num_epochs = 5000
 
 use_scaler = True
-out_dir = "outs/out27"
-use_wandb = False
+detrend_and_filter = True
+out_dir = "outs/out44"
+use_wandb = True
 
 PREDICTING_FIELDS = [
+    "mode",
     "gender",
     "hold racket handed",
     "play years",
     "level",
-    "mode"
 ]
 
+TEST_PREDICTING_FIELDS = [
+    "mode",
+]
+
+os.makedirs(out_dir, exist_ok=True)
 
 print(f"preparing dataset...")
 train_df = pd.read_csv(TRAIN_INFO)
-test_df = pd.read_csv(TEST_INFO)[["unique_id"]]
+test_df = pd.read_csv(TEST_INFO)
 
 train_dataset = TrajectoryDataset(
     TRAIN_DATA_DIR,
@@ -147,21 +158,27 @@ train_dataset = TrajectoryDataset(
     max_seq_len=model_args.max_seq_len,
     patch_size=model_args.patch_size,
     use_scaler=use_scaler,
+    detrend_and_filter=detrend_and_filter,
     label=True,
     predicting_fields=PREDICTING_FIELDS,
 )
 
-joblib.dump(train_dataset.scaler, f"{out_dir}/scaler.joblib")
+if use_scaler:
+    joblib.dump(train_dataset.scaler, f"{out_dir}/scaler.joblib")
 
 valid_dataset = TrajectoryDataset(
     TEST_DATA_DIR,
     test_df,
-    train=False,
+    train=True,
     max_seq_len=model_args.max_seq_len,
     patch_size=model_args.patch_size,
     use_scaler=use_scaler,
     scaler=train_dataset.scaler if use_scaler else None,
-    label=False,
+    encoder=train_dataset.encoders,
+    sample_weights=False,
+    detrend_and_filter=detrend_and_filter,
+    label=True,
+    predicting_fields=TEST_PREDICTING_FIELDS,
 )
 
 svm_dataset = TrajectoryDataset(
@@ -172,7 +189,9 @@ svm_dataset = TrajectoryDataset(
     patch_size=model_args.patch_size,
     use_scaler=use_scaler,
     scaler=train_dataset.scaler if use_scaler else None,
+    encoder=train_dataset.encoders,
     sample_weights=False,
+    detrend_and_filter=detrend_and_filter,
     label=True,
     predicting_fields=PREDICTING_FIELDS,
 )
@@ -184,7 +203,7 @@ train_dataloader = DataLoader(
     train_dataset,
     batch_size=batch_size,
     shuffle=True,
-    # num_workers=8,
+    num_workers=4,
     pin_memory=True,
 )
 
@@ -192,15 +211,19 @@ valid_dataloader = DataLoader(
     valid_dataset,
     batch_size=batch_size,
     shuffle=False,
-    # num_workers=8,
+    num_workers=4,
     pin_memory=True,
 )
+
+input, target, label = next(iter(valid_dataloader))
+print(f"input shape: {input.shape}")
+print(f"target shape: {target.shape}")
+print(f"label shape: {label.shape}")
+# exit(0)
 
 model = GPT(model_args)
 optimizer = model.configure_optimizers(learning_rate=learning_rate, weight_decay=weight_decay, betas=betas, device_type=device)
 model = model.to(device)
-
-os.makedirs(out_dir, exist_ok=True)
 
 if use_wandb:
     wandb_configs = {
@@ -219,6 +242,9 @@ if use_wandb:
         "out_dir": out_dir,
         "cutoff": 30,
         "predicting_fields": PREDICTING_FIELDS,
+        "detrend_and_filter": detrend_and_filter,
+        "enable_mode_embedding": model_args.enable_mode_embedding,
+        "ff": model_args.ff,
     }
 
     wandb.init(project="imugpt-experiments-002", config=wandb_configs)
@@ -234,9 +260,12 @@ for epoch in range(num_epochs):
     model.train()
     pbar = tqdm(train_dataloader, desc=f"Epoch {epoch+1}/{num_epochs}", leave=False)
     for i, (input, target, label) in enumerate(pbar):
-        input, target = input.to(device), target.to(device)
+        input, target, label_cu = input.to(device), target.to(device), label.to(device)
         optimizer.zero_grad()
-        logits, loss, embedding = model(input, target)
+        if model_args.enable_mode_embedding:
+            logits, loss, embedding = model(input, target, label_cu[:, 0])
+        else:
+            logits, loss, embedding = model(input, target)
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         optimizer.step()
@@ -251,14 +280,17 @@ for epoch in range(num_epochs):
     print(f"Epoch {epoch+1}/{num_epochs} - Train Loss: {total_train_loss:.4f}")
 
     model.eval()
-    pbar = tqdm(valid_dataloader, desc=f"Epoch {epoch+1}/{num_epochs}", leave=False)
     with torch.no_grad():
-        # for _ in range(30):
-        for i, (input, target) in enumerate(pbar):
-            input, target = input.to(device), target.to(device)
-            logits, loss, embedding = model(input, target)
-            total_valid_loss += loss.item()
-            val_seen_items += input.size(0)
+        for _ in range(30):
+            pbar = tqdm(valid_dataloader, desc=f"Epoch {epoch+1}/{num_epochs}", leave=False)
+            for i, (input, target, label) in enumerate(pbar):
+                input, target, label_cu = input.to(device), target.to(device), label.to(device)
+                if model_args.enable_mode_embedding:
+                    logits, loss, embedding = model(input, target, label_cu[:, 0])
+                else:
+                    logits, loss, embedding = model(input, target)
+                total_valid_loss += loss.item()
+                val_seen_items += input.size(0)
                 
     total_valid_loss /= val_seen_items
     if use_wandb:
@@ -268,7 +300,7 @@ for epoch in range(num_epochs):
 
     print(f"Epoch {epoch+1}/{num_epochs} - Valid Loss: {total_valid_loss:.4f}")
     
-    if (epoch + 1) % 50 == 0:
+    if (epoch + 1) % 40 == 0 or epoch == 0:
         print(f"Saving model at epoch {epoch+1}...")
         torch.save(model.state_dict(), f"{out_dir}/model_epoch_{epoch+1}.pth")
         svm_evaluate(model, svm_dataset)
@@ -279,15 +311,17 @@ for epoch in range(num_epochs):
         epochs_since_improvement = 0
     else:
         epochs_since_improvement += 1
-        if epochs_since_improvement > 50:
+        if epochs_since_improvement > 42:
             print(f"Early stopping triggered after {epochs_since_improvement} epochs without improvement.")
             break
         print(f"No improvement in validation loss for {epochs_since_improvement} epochs.")
     
-if use_wandb:
-    wandb.finish()
-
 # Save the best model weights
 torch.save(best_model_wts, f"{out_dir}/best_model.pth")
 torch.save(model.state_dict(), f"{out_dir}/model_final.pth")
+
+svm_evaluate(model, svm_dataset)
+
+if use_wandb:
+    wandb.finish()
 

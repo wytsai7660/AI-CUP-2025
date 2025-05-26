@@ -110,9 +110,9 @@ class MLP(nn.Module):
 
     def __init__(self, config):
         super().__init__()
-        self.c_fc    = nn.Linear(config.n_embd, 4 * config.n_embd, bias=config.bias)
+        self.c_fc    = nn.Linear(config.n_embd, config.ff * config.n_embd, bias=config.bias)
         self.gelu    = nn.GELU()
-        self.c_proj  = nn.Linear(4 * config.n_embd, config.n_embd, bias=config.bias)
+        self.c_proj  = nn.Linear(config.ff * config.n_embd, config.n_embd, bias=config.bias)
         self.dropout = nn.Dropout(config.dropout)
 
     def forward(self, x):
@@ -145,7 +145,9 @@ class GPTConfig:
     n_embd: int = 192
     patch_size: int = 16
     dropout: float = 0.0
+    ff: int = 4  # Feed-forward expansion factor
     bias: bool = True
+    enable_mode_embedding: bool = False  # Whether to enable mode embedding
     
     def __init__(self, **kwargs):
         for k, v in kwargs.items():
@@ -157,14 +159,18 @@ class GPTConfig:
 
 class GPT(nn.Module):
 
-    def __init__(self, config, class_weights=None):
+    def __init__(self, config: GPTConfig, class_weights=None):
         super().__init__()
         assert config.block_size is not None
         self.config = config
         self.class_weights = class_weights
         self.train_classifier = class_weights is not None
         
-        self.cls_token = nn.Parameter(torch.zeros(1, 1, config.n_embd))
+        if config.enable_mode_embedding:
+            self.mode_embedding = nn.Embedding(10, config.n_embd)  # Assuming 10 modes for classification
+        else:
+            self.cls_token = nn.Parameter(torch.zeros(1, 1, config.n_embd))
+        
         self.transformer = nn.ModuleDict(dict(
             wte = PatchEmbed1D(seq_len=config.max_seq_len, patch_size=config.patch_size, in_chans=config.in_chans, embed_dim=config.n_embd),
             wpe = nn.Embedding(config.block_size + 1, config.n_embd),
@@ -206,15 +212,22 @@ class GPT(nn.Module):
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
-    def forward(self, idx, targets=None):
+    def forward(self, idx, targets=None, mode=None):
         device = idx.device
         patch_emb = self.transformer.wte(idx) # token embeddings of shape (b, t, n_embd)
         b, t, c = patch_emb.size()
         
         assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
         
-        cls_tokens = self.cls_token.expand(b, -1, -1)  # (B, 1, n_embd)
-        x = torch.cat((cls_tokens, patch_emb), dim=1)  # (B, T+1, n_embd)
+        if self.config.enable_mode_embedding:
+            assert mode is not None, "Mode must be provided when mode embedding is enabled"
+            mode_emb = self.mode_embedding(mode)
+            mode_emb = mode_emb.unsqueeze(1)  # (B, 1, n_embd)
+            x = torch.cat((mode_emb, patch_emb), dim=1)  # (B, T+1, n_embd)
+        else:
+            assert self.cls_token is not None, "cls_token must be defined when mode embedding is not enabled"
+            cls_tokens = self.cls_token.expand(b, -1, -1)  # (B, 1, n_embd)
+            x = torch.cat((cls_tokens, patch_emb), dim=1)  # (B, T+1, n_embd)
         
         pos = torch.arange(0, t + 1, dtype=torch.long, device=device) # shape (t)
         pos_emb = self.transformer.wpe(pos) # position embeddings of shape (t, n_embd)

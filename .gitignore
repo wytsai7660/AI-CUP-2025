@@ -186,3 +186,6 @@ Training_accuracy.png
 
 .vscode/
 wandb/
+*.pth
+*.png
+*.joblib

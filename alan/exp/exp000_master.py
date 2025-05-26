@@ -211,14 +211,107 @@ import itertools
 import copy
 
 ablation_configs = [
+    # {
+    #     "name": "encoder_CE",
+    #     "batch_size": [8, 16, 32],
+    #     "n_epochs": [10, 20],
+    #     "lr": [1e-3, 1e-4, 1e-5],
+    #     "weight_decay": [5e-2, 5e-3, 5e-4],
+    #     "num_warmup_steps": 10,
+    #     "main_loss_weight": [0.05, 0.2, 0.6, 0.8],
+    #     "loss_type": "CE",
+    #     "model_type": "encoder",
+    #     "seq_len": 1000,
+    #     "shift": 500,
+    #     "n_enc": 6,
+    #     "nhead": 8,
+    #     "d_model": 128,
+    #     "max_seq_len": 1000,
+    #     "dropout": 0.5,
+    #     "pos_emb": [True, False],
+    #     "mean_pooling": True,
+    #     "input_dim": 24,
+    #     "use_aug_features": "basic", # Fixed
+    #     "use_mode_as_target": False, # Fixed
+    #     "split_type": "level", # Fixed
+    #     "output_dim": 11, # Fixed
+
+    # },
+
+    # {
+    #     "name": "encoder_baseline_CE", # Changed to be more of a base name
+    #     "batch_size": [8, 16, 32],
+    #     "n_epochs": [10, 20],
+    #     "lr": [1e-3, 1e-4, 1e-5],
+    #     "weight_decay": [5e-2, 5e-3, 5e-4],
+    #     "num_warmup_steps": 10, # Fixed
+    #     "main_loss_weight": [0.05, 0.2, 0.6, 0.8],
+    #     "loss_type": "CE", # Fixed
+    #     "model_type": "encoder", # Fixed
+    #     "seq_len": 1000, # Fixed
+    #     "shift": 500, # Fixed
+    #     "input_dim": 24, # Fixed
+    #     "hidden_dim": 64, # Fixed
+    #     "d_model": 128, # Fixed
+    #     "dropout": [0.2, 0.5],
+    #     "mean_pooling": True, # Fixed
+    #     "use_aug_features": "basic", # Fixed
+    #     "use_mode_as_target": False, # Fixed
+    #     "split_type": "level", # Fixed
+    #     "output_dim": 11, # Fixed
+    # },
+    # {
+    #     "name": "gru_best_macro_roc", # Changed to be more of a base name
+    #     "batch_size": 8,
+    #     "n_epochs": 20,
+    #     "lr": 1e-3,
+    #     "weight_decay": 5e-2,
+    #     "num_warmup_steps": 10, # Fixed
+    #     "main_loss_weight": 0.2,
+    #     "loss_type": "CE", # Fixed
+    #     "model_type": "gru", # Fixed
+    #     "seq_len": 1000, # Fixed
+    #     "shift": 500, # Fixed
+    #     "input_dim": 24, # Fixed
+    #     "hidden_dim": 64, # Fixed
+    #     "d_model": 128, # Fixed
+    #     "dropout": 0.2,
+    #     "mean_pooling": True, # Fixed
+    #     "use_aug_features": "basic", # Fixed
+    #     "use_mode_as_target": False, # Fixed
+    #     "split_type": "level", # Fixed
+    #     "output_dim": 11, # Fixed
+    # },
+    # {
+    #     "name": "gru_best_most", # Changed to be more of a base name
+    #     "batch_size": 8,
+    #     "n_epochs": 20,
+    #     "lr": 1e-3,
+    #     "weight_decay": 5e-3,
+    #     "num_warmup_steps": 10, # Fixed
+    #     "main_loss_weight": 0.8,
+    #     "loss_type": "CE", # Fixed
+    #     "model_type": "gru", # Fixed
+    #     "seq_len": 1000, # Fixed
+    #     "shift": 500, # Fixed
+    #     "input_dim": 24, # Fixed
+    #     "hidden_dim": 64, # Fixed
+    #     "d_model": 128, # Fixed
+    #     "dropout": 0.5,
+    #     "mean_pooling": True, # Fixed
+    #     "use_aug_features": "basic", # Fixed
+    #     "use_mode_as_target": False, # Fixed
+    #     "split_type": "level", # Fixed
+    #     "output_dim": 11, # Fixed
+    # },
     {
-        "name": "gru_baseline_CE_len1000", # Changed to be more of a base name
-        "batch_size": [8, 16, 32],
-        "n_epochs": [5, 10, 20],
-        "lr": [1e-3, 1e-4, 1e-5],
-        "weight_decay": [5e-2, 5e-3, 5e-4],
+        "name": "gru_best_macro_f1", # Changed to be more of a base name
+        "batch_size": 8,
+        "n_epochs": 10,
+        "lr": 1e-3,
+        "weight_decay": 5e-2,
         "num_warmup_steps": 10, # Fixed
-        "main_loss_weight": [0.05, 0.2, 0.6, 0.8],
+        "main_loss_weight": 0.05,
         "loss_type": "CE", # Fixed
         "model_type": "gru", # Fixed
         "seq_len": 1000, # Fixed
@@ -226,7 +319,7 @@ ablation_configs = [
         "input_dim": 24, # Fixed
         "hidden_dim": 64, # Fixed
         "d_model": 128, # Fixed
-        "dropout": [0.2, 0.5],
+        "dropout": 0.5,
         "mean_pooling": True, # Fixed
         "use_aug_features": "basic", # Fixed
         "use_mode_as_target": False, # Fixed
@@ -235,7 +328,7 @@ ablation_configs = [
     },
 ]
 
-script_to_run = "exp005_sweep.py" # Make sure this script exists and is executable
+script_to_run = "exp007_sweep.py" # Make sure this script exists and is executable
 temp_config_dir = "temp_configs"
 
 os.makedirs(temp_config_dir, exist_ok=True)
@@ -310,7 +403,7 @@ for i, run_config in enumerate(all_individual_runs):
 
         # Ensure script_to_run is in the path or provide full path
         # Example: command = [sys.executable, os.path.join(os.getcwd(), script_to_run), '--config', temp_config_filename]
-        command = [sys.executable, script_to_run, '--config', temp_config_filename, '--wandb'] # '--wandb'
+        command = [sys.executable, script_to_run, '--config', temp_config_filename]  #'--device', 'cuda:1', '--wandb'
 
         print(f"\nExecuting command: {' '.join(command)}")
         
