@@ -30,3 +30,12 @@ class Normalize(Transform):
 
     def __call__(self, x: torch.Tensor) -> torch.Tensor:
         return (x - self.mean) / self.std
+
+
+class NormalizeSingle(Transform):
+    """
+    This one is weirdly good for the "gender" field.
+    """
+
+    def __call__(self, x: torch.Tensor) -> torch.Tensor:
+        return (x - x.mean(dim=0)) / x.std(dim=0)
