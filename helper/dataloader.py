@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import List, Tuple
+from typing import final, override
 
 import numpy as np
 import pandas as pd
@@ -16,6 +16,7 @@ from helper.transform import Transform
 INF = int(1e18)
 
 
+@final
 class TrajectoryDataset(Dataset):
     """
     每筆 item 回傳 (segment, meta)，皆為 torch.Tensor:
@@ -39,7 +40,7 @@ class TrajectoryDataset(Dataset):
         # print(metas.shape)
         # print(metas)
 
-        self.samples: List[Tuple[torch.Tensor, torch.Tensor]] = []
+        self.samples: list[tuple[torch.Tensor, torch.Tensor]] = []
         fpaths = [data_dir / f"{id}.txt" for id in dataframe["unique_id"].values]
         for fpath, meta in tqdm(
             zip(fpaths, metas), desc="Loading Data", total=len(fpaths)
@@ -55,6 +56,7 @@ class TrajectoryDataset(Dataset):
     def __len__(self):
         return len(self.samples)
 
+    @override
     def __getitem__(self, idx: int):
         item = self.samples[idx]
         if self.transform:
@@ -62,7 +64,7 @@ class TrajectoryDataset(Dataset):
         return item
 
 
-def collate_fn_torch(batch: List[Tuple[torch.Tensor, torch.Tensor]]):
+def collate_fn_torch(batch: list[tuple[torch.Tensor, torch.Tensor]]):
     """
     batch: list of (segment (L_i,6), meta (M,))
     回傳：
@@ -87,7 +89,7 @@ def get_train_valid_dataloader(
     segment: Segment | None = None,
     train_transform: Transform | None = None,
     valid_transform: Transform | None = None,
-) -> Tuple[DataLoader, DataLoader]:
+) -> tuple[DataLoader, DataLoader]:
     """
     Splits the data into training and validation DataLoaders
 
@@ -198,6 +200,8 @@ if __name__ == "__main__":
     import matplotlib.pyplot as plt
 
     from config import MEAN, STD, TRAIN_DATA_DIR, TRAIN_INFO
+
+    # Use * here just for quick testing
     from helper.segment import *
     from helper.transform import *
 
