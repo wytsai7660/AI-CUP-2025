@@ -104,8 +104,8 @@ def get_csv_train_valid_dataloader(
         from config import TRAIN_DATA_DIR, TRAIN_INFO
         from helper.transform import Compose, RandomExtendSegment
         from helper.csv_dataloader import get_csv_train_valid_dataloader
-
-        cut_csv_path = PROJECT_ROOT / 'csv' / 'cut_points_results.csv'
+        PROJECT_ROOT = Path(__file__).resolve().parent.parent
+        cut_csv_path = PROJECT_ROOT / 'helper' / 'hmm_cut_points_results.csv'
         train_loader, valid_loader = get_csv_train_valid_dataloader(
             data_dir=TRAIN_DATA_DIR,
             info_csv=TRAIN_INFO,
