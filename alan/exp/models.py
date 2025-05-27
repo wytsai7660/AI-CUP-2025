@@ -132,3 +132,150 @@ class EncoderOnlyClassifier(nn.Module):
         logits = self.classifier(last)  # shape: (batch_size, 11)
         
         return logits
+
+
+class PatchTST(nn.Module):
+    def __init__(self, args):
+        super().__init__()
+        self.args = args
+        self.n_channels = args.n_channels
+        self.patch_len = args.patch_len
+        self.d_model = args.d_model
+        if args.seq_len % args.patch_len != 0:
+            print(f"Warning: seq_len ({args.seq_len}) is not perfectly divisible by patch_len ({args.patch_len}).")
+            print(f"Max_num_patchs will be floor({args.seq_len} / {args.patch_len}).")
+
+        self.max_num_patchs = args.seq_len // args.patch_len
+        
+        self.patch_embedding = nn.Linear(args.patch_len, args.d_model)
+        pos_encoding = self._generate_sinusoidal_embedding(self.max_num_patchs, self.d_model)
+        self.register_buffer('pos_encoder', pos_encoding) # Not a learnable parameter
+
+        # self.pos_encoder = nn.Parameter(torch.randn(1, self.max_num_patchs, args.d_model))
+        
+        encoder_layers = nn.TransformerEncoderLayer(
+            d_model=args.d_model, 
+            nhead=args.nhead, 
+            dim_feedforward=args.d_model * 4, 
+            dropout=args.dropout,
+            batch_first=True,
+            norm_first=True,
+            activation=F.gelu,
+        )
+        
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layers, num_layers=args.n_enc)
+        
+        self.classification_head = nn.Sequential(
+            # nn.LayerNorm(args.n_channels * args.d_model),
+            nn.Linear(args.n_channels * args.d_model, args.d_model // 2),
+            # nn.LayerNorm(args.d_model // 2),
+            nn.GELU(),
+            nn.Dropout(args.dropout),
+            nn.Linear(args.d_model // 2, args.output_dim)
+        )
+        
+        self.dropout = nn.Dropout(args.dropout)
+        
+        
+    def _generate_sinusoidal_embedding(self, max_len, d_model):
+        """
+        Generates sinusoidal positional embeddings.
+        Args:
+            max_len: Maximum sequence length (number of patches).
+            d_model: Embedding dimension.
+        Returns:
+            Tensor of shape (1, max_len, d_model)
+        """
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
+        
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        
+        return pe.unsqueeze(0) # Add batch dimension (1, max_len, d_model)
+
+    
+    
+    def forward(self, x):
+        B, T, C = x.size()
+        
+        num_patchs = T // self.patch_len
+        if T % self.patch_len != 0:
+            print(f"Warning: Input sequence length T ({T}) is not perfectly divisible by patch_len ({self.patch_len}).")
+            print(f"Using {num_patchs} patches.")
+        
+        x = x.permute(0, 2, 1)
+        x = x.reshape(B * C, T)
+        # (B*C, num_patches, patch_len)
+        x_patched = x.unfold(dimension=-1, size=self.patch_len, step=self.patch_len)
+        # Patch Embedding: (B*C, num_patches, d_model)
+        x_embedded = self.patch_embedding(x_patched)
+        
+        if num_patchs > self.max_num_patchs:
+            raise ValueError(f"Input sequence yields {num_patchs} patches, but max_num_patchs is {self.max_num_patchs}. Check seq_len and patch_len.")
+
+        x_embedded = x_embedded + self.pos_encoder[:, :num_patchs, :] 
+        x_embedded = self.dropout(x_embedded)
+        
+        # Input: (B*C, num_patches, d_model)
+        # Output: (B*C, num_patches, d_model)
+        transformer_out = self.transformer_encoder(x_embedded)
+        
+        # (B*C, d_model)
+        aggregated_out = transformer_out.mean(dim=1)
+        
+        # (B, C, d_model)
+        channel_combined_out = aggregated_out.view(B, C, self.d_model)
+        
+        # (B, C * d_model)
+        final_representation = channel_combined_out.reshape(B, C * self.d_model)
+
+        # (B, num_classes)
+        output = self.classification_head(final_representation)
+
+        return output
+
+
+class FocalLoss(nn.Module):
+    def __init__(self, alpha=None, gamma=2.0, reduction='mean'):
+        """
+        alpha: 可選 class weighting，shape: (num_classes,)
+        gamma: focusing parameter
+        reduction: 'mean', 'sum', or 'none'
+        """
+        super(FocalLoss, self).__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+        self.reduction = reduction
+
+    def forward(self, inputs, targets):
+        """
+        inputs: raw logits, shape (B, C)
+        targets: one-hot labels, shape (B, C)
+        """
+        # softmax + log
+        log_probs = F.log_softmax(inputs, dim=1)      # shape (B, C)
+        probs = torch.exp(log_probs)                  # shape (B, C)
+
+        # focal loss term
+        focal_term = (1 - probs) ** self.gamma
+
+        # if alpha is provided, apply class weights
+        if self.alpha is not None:
+            alpha = self.alpha.to(inputs.device)      # shape (C,)
+            alpha_factor = targets * alpha.unsqueeze(0)  # shape (B, C)
+        else:
+            alpha_factor = 1.0
+
+        # element-wise focal loss
+        loss = -alpha_factor * focal_term * targets * log_probs  # shape (B, C)
+
+        loss = loss.sum(dim=1)  # sum over classes
+
+        if self.reduction == 'mean':
+            return loss.mean()
+        elif self.reduction == 'sum':
+            return loss.sum()
+        else:
+            return loss
