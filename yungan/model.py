@@ -3,7 +3,7 @@ import torch.nn as nn
 import math
 
 class PositionalEncoding(nn.Module):
-    def __init__(self, d_model: int, max_len: int = 500):
+    def __init__(self, d_model: int, max_len: int = 1500):
         super().__init__()
         # pe: [max_len, d_model]
         pe = torch.zeros(max_len, d_model)
@@ -23,7 +23,7 @@ class PositionalEncoding(nn.Module):
         return x + self.pe[:seq_len]
 
 class EncoderOnlyClassifier(nn.Module):
-    def __init__(self, d_model=6, n_enc = 9,nhead = 8, dim_ff=256, max_len=500):
+    def __init__(self, d_model=6, n_enc = 9,nhead = 8, dim_ff=256, max_len=1500):
         super().__init__()
         # 初始化 Transformer 模型
         self.input_proj = nn.Linear(d_model, 64)

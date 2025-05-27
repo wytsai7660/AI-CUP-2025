@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 from torch.optim.lr_scheduler import LambdaLR
 from config import TRAIN_DATA_DIR, TRAIN_INFO, MEAN, STD
-from yungan.model_withoutPE import EncoderOnlyClassifier
+from yungan.model import EncoderOnlyClassifier
 from helper.dataloader import get_train_valid_dataloader
 from helper.focal_loss import class_weights
 from helper.segment import *
@@ -35,7 +35,7 @@ def main():
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
     epochs = 100
     learning_rate = 0.0001
-    train_bathch_size = 32
+    train_bathch_size = 8
 
     # data path and weight path
     base_path = os.path.dirname(os.path.abspath(__file__))
@@ -49,10 +49,10 @@ def main():
     train_loader, valid_loader = get_train_valid_dataloader(
         TRAIN_DATA_DIR,
         TRAIN_INFO,
-        split_target="gender",
+        split_target="play years",
         batch_size=train_bathch_size,
         segment=Yungan(),
-        max_duration = 500,
+        max_duration = 1000,
         train_transform=Compose(
             [
                 Normalize(mean=MEAN, std=STD),
@@ -65,7 +65,7 @@ def main():
         ),
     )
     # model
-    model = EncoderOnlyClassifier(d_model=6, n_enc=9, dim_ff=256)
+    model = EncoderOnlyClassifier(d_model=6, n_enc=1, dim_ff=128)
     model = model.to(device)
 
     # set optimizer and loss function
@@ -116,17 +116,18 @@ def main():
             decay.append(param)
 
     optimizer = torch.optim.AdamW(
-        [{"params": decay,    "weight_decay": 1e-3},
+        [{"params": decay,    "weight_decay": 5e-2},
         {"params": no_decay, "weight_decay": 0.0}],
         lr=learning_rate
     )
     # optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate,weight_decay=1e-5)
-    scheduler = get_linear_warmup_cosine_scheduler(
-        optimizer=optimizer,
-        epochs=epochs,
-        train_loader_len=len(train_loader),
-        warmup_ratio=0.1
-    )
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=7, gamma=0.1)
+    # scheduler = get_linear_warmup_cosine_scheduler(
+    #     optimizer=optimizer,
+    #     epochs=epochs,
+    #     train_loader_len=len(train_loader),
+    #     warmup_ratio=0.1
+    # )
 
     # train
     train_loss_list = list()
@@ -136,7 +137,7 @@ def main():
     best = 100
     best_model_wts = copy.deepcopy(model.state_dict())
 
-    patience = 5
+    patience = 10
     no_improve = 0
     
     # for batch in train_loader:
@@ -168,8 +169,10 @@ def main():
             for i, (start, end) in enumerate([(0,2), (2,4), (4,7), (7,11)]):
                 logits_group = output[:, start:end]                # [B, group_size]
                 targets_group = label_onehot[:, start:end].argmax(dim=1)  # [B]
-                loss += criterion_list[i](logits_group, targets_group)     # 累加每组 loss
-
+                if (i == 2):
+                    loss += criterion_list[i](logits_group, targets_group)*1.5     # 累加每组 loss
+                else:
+                    loss += criterion_list[i](logits_group, targets_group)
                 preds_group = logits_group.argmax(dim=1)           # [B]
                 train_correct += (preds_group == targets_group).sum().item()
                 train_samples += bsz
@@ -177,6 +180,7 @@ def main():
             loss.backward()
             optimizer.step()
             train_loss += loss.item() * bsz
+            # print(label_onehot)
 
         train_loss /= train_samples
         train_loss_list.append(train_loss)
@@ -200,6 +204,7 @@ def main():
                     cur_B = logits_group.size(0)                    # 真正的 batch 大小
 
                     # 累加加权 loss
+                    # if not i == 3:
                     valid_loss    += criterion_list[i](logits_group, targets_group).item() * cur_B
                     # 累加正确数
                     valid_correct += (logits_group.argmax(dim=1) == targets_group).sum().item()
