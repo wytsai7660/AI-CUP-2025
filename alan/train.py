@@ -111,7 +111,7 @@ def svm_evaluate(model, dataset):
 device = "cuda:0"
 model_args = GPTConfig(
     max_seq_len = 1024,
-    in_chans = 6,
+    in_chans = 16,
     n_layer = 8,
     n_head = 8,
     n_embd = 128,
@@ -130,7 +130,10 @@ num_epochs = 5000
 
 use_scaler = True
 detrend_and_filter = True
-out_dir = "outs/out44"
+data_transform = "diff_and_magnitude"
+filter_order = 4
+freq_cutoff = 30  # Hz
+out_dir = "outs/out61"
 use_wandb = True
 
 PREDICTING_FIELDS = [
@@ -161,6 +164,9 @@ train_dataset = TrajectoryDataset(
     detrend_and_filter=detrend_and_filter,
     label=True,
     predicting_fields=PREDICTING_FIELDS,
+    filter_order=filter_order,
+    freq_cutoff=freq_cutoff,
+    data_transform=data_transform,
 )
 
 if use_scaler:
@@ -179,6 +185,9 @@ valid_dataset = TrajectoryDataset(
     detrend_and_filter=detrend_and_filter,
     label=True,
     predicting_fields=TEST_PREDICTING_FIELDS,
+    filter_order=filter_order,
+    freq_cutoff=freq_cutoff,
+    data_transform=data_transform,
 )
 
 svm_dataset = TrajectoryDataset(
@@ -194,6 +203,9 @@ svm_dataset = TrajectoryDataset(
     detrend_and_filter=detrend_and_filter,
     label=True,
     predicting_fields=PREDICTING_FIELDS,
+    filter_order=filter_order,
+    freq_cutoff=freq_cutoff,
+    data_transform=data_transform,
 )
 
 print(f"train dataset size: {len(train_dataset)}")
@@ -240,11 +252,13 @@ if use_wandb:
         "num_epochs": num_epochs,
         "use_scaler": use_scaler,
         "out_dir": out_dir,
-        "cutoff": 30,
+        "cutoff": freq_cutoff,
         "predicting_fields": PREDICTING_FIELDS,
         "detrend_and_filter": detrend_and_filter,
         "enable_mode_embedding": model_args.enable_mode_embedding,
         "ff": model_args.ff,
+        "filter_order": filter_order,
+        "mode_in_class_weights": True,
     }
 
     wandb.init(project="imugpt-experiments-002", config=wandb_configs)

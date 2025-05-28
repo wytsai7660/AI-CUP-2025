@@ -30,6 +30,9 @@ class TrajectoryDataset(Dataset):
         scaler: StandardScaler = None,
         encoder: List[LabelEncoder] = None,
         predicting_fields: List[str] = None,
+        freq_cutoff: int = 30,
+        filter_order: int = 4,
+        data_transform: str = "None",
     ):
         self.max_seq_len = max_seq_len
         self.patch_size = patch_size
@@ -48,7 +51,8 @@ class TrajectoryDataset(Dataset):
             metas = torch.tensor(encoded, dtype=torch.long)
             
             if sample_weights:
-                cal_metas = metas[:, 1:]  # Exclude the first column (unique_id)
+                # cal_metas = metas[:, 1:]  # Exclude the first column (unique_id)
+                cal_metas = metas
                 unique_combinations, counts = np.unique(cal_metas.numpy(), axis=0, return_counts=True)
                 weights = max(counts) / counts
                 # weights = weights ** 0.5  # soften the weights by taking the square root
@@ -80,15 +84,45 @@ class TrajectoryDataset(Dataset):
             data = trim_method(data)[0].numpy()
             if detrend_and_filter:
             # Apply low-pass filter
-                data = self.butter_lowpass_filter(data, cutoff=30, fs=85, order=4)
+                data = self.butter_lowpass_filter(data, cutoff=freq_cutoff, fs=85, order=filter_order)
             data = data.astype(np.float32)
+            
+            if data_transform == "magnitude_only":
+                acc_mag = np.linalg.norm(data[:, 0:3], axis=1, keepdims=True)
+                gyro_mag = np.linalg.norm(data[:, 3:6], axis=1, keepdims=True)
+                data = np.concatenate((acc_mag, gyro_mag), axis=1)
+            elif data_transform == "gryo_and_az":
+                gyro_mag = np.linalg.norm(data[:, 3:6], axis=1, keepdims=True)
+                data = np.concatenate((data[:, 2:6], gyro_mag), axis=1)
+            elif data_transform == "diff_only":
+                data_diff = np.diff(data, axis=0, prepend=np.zeros((1, data.shape[1])))
+                acc_mag = np.linalg.norm(data_diff[:, 0:3], axis=1, keepdims=True)
+                gyro_mag = np.linalg.norm(data_diff[:, 3:6], axis=1, keepdims=True)
+                data = np.concatenate((data, acc_mag, gyro_mag), axis=1)
+            elif data_transform == "diff_only_fixed":
+                data_diff = np.diff(data, axis=0, prepend=np.zeros((1, data.shape[1])))
+                acc_mag = np.linalg.norm(data[:, 0:3], axis=1, keepdims=True)
+                gyro_mag = np.linalg.norm(data[:, 3:6], axis=1, keepdims=True)
+                acc_mag_diff = np.diff(acc_mag, axis=0, prepend=np.zeros((1, 1)))
+                gyro_mag_diff = np.diff(gyro_mag, axis=0, prepend=np.zeros((1, 1)))
+                data = np.concatenate((data, acc_mag_diff, gyro_mag_diff), axis=1)
+            elif data_transform == "diff_and_magnitude":
+                acc_mag = np.linalg.norm(data[:, 0:3], axis=1, keepdims=True)
+                gyro_mag = np.linalg.norm(data[:, 3:6], axis=1, keepdims=True)
+                data_diff = np.diff(data, axis=0, prepend=np.zeros((1, data.shape[1])))
+                acc_mag_diff = np.diff(acc_mag, axis=0, prepend=np.zeros((1, 1)))
+                gyro_mag_diff = np.diff(gyro_mag, axis=0, prepend=np.zeros((1, 1)))
+                data = np.concatenate((data, acc_mag, gyro_mag, data_diff, acc_mag_diff, gyro_mag_diff), axis=1)
+
+
+                
             
             if use_scaler:
                 all_features.append(data)
-            else:
-                mean = data.mean(axis=0)
-                std = data.std(axis=0)
-                data = (data - mean) / (std + 1e-8)
+            # else:
+            #     mean = data.mean(axis=0)
+            #     std = data.std(axis=0)
+            #     data = (data - mean) / (std + 1e-8)
             
             if train:
                 for _ in range(sample_weight):
@@ -124,6 +158,8 @@ class TrajectoryDataset(Dataset):
 
             if self.use_scaler:
                 seq = self.scaler.transform(seq).astype(np.float32)
+            else:
+                seq = (seq - seq.mean(axis=0)) / (seq.std(axis=0) + 1e-8)
 
             if self.label:
                 return seq[:self.max_seq_len], seq[self.patch_size:self.max_seq_len + self.patch_size], item[1]
@@ -139,6 +175,9 @@ class TrajectoryDataset(Dataset):
 
         if self.use_scaler:
             seq = self.scaler.transform(seq).astype(np.float32)
+        else:
+            seq_need = seq[segment_start:segment_start + self.max_seq_len + self.patch_size]
+            seq[segment_start:segment_start + self.max_seq_len + self.patch_size] = (seq_need - seq_need.mean(axis=0)) / (seq_need.std(axis=0) + 1e-8)
 
         if self.label:
             return seq[segment_start:segment_start + self.max_seq_len], seq[segment_start + self.patch_size:segment_start + self.max_seq_len + self.patch_size], item[1]
