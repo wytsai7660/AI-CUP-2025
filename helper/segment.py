@@ -1,7 +1,9 @@
+import re
 import warnings
 from abc import ABC, abstractmethod
-from typing import List
 from collections import Counter
+from pathlib import Path
+from typing import List, final
 
 import numpy as np
 import ruptures as rpt
@@ -367,9 +369,45 @@ class HMM(Segment):
         return segs
 
 
+def parse_cut_points(s: str) -> list[tuple[int, int, int]]:
+    """
+    從像 '[(55, 47, 73), (114, 106, 130), …]' 的字串中
+    提取所有三元 tuple，回傳 List[(int,int,int)]。
+    """
+    triples = re.findall(r"\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)", s)
+    return [(int(a), int(b), int(c)) for a, b, c in triples]
 
-        
-        
+
+@final
+class UseCutPoints:
+    """
+    用預運算好的 CSV（unique_id, cut point 列表）分段（通常是因為分段方法極慢）
+
+    Note
+    ----
+    這個類別不繼承 Segment，並且使用方法也不同。
+    """
+
+    def __init__(
+        self, cut_points_csv: Path, threshold: int = 20, fallback: Segment = Yungan()
+    ):
+        self.threshold = threshold
+        self.fallback = fallback
+
+        df = pd.read_csv(cut_points_csv, dtype={"cut point": str})
+        triplets = df["cut point"].apply(parse_cut_points)
+        self.cut_map = dict(zip(df["unique_id"], triplets))
+
+    def __call__(self, data: torch.Tensor, id: int) -> List[torch.Tensor]:
+        triplets = self.cut_map.get(id, [])
+        segs = (
+            [data[start:end] for _, start, end in triplets]
+            if len(triplets) >= self.threshold
+            else self.fallback(data)
+        )
+        return segs
+
+
 # class cut_by_hmm(cut_method):
 #     """
 #     HMM（Hidden Markov Model）：把每个时刻的传感器特征看成观测，隐藏状态分成「静止／运动」两类，利用 HMM 来解码状态序列并提取连续的运动段

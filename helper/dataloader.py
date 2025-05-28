@@ -10,7 +10,7 @@ from tqdm import tqdm
 
 from config import MEAN, NUM_WORKERS, PREDICTING_FIELDS, SEED
 from helper.functions import labels_to_onehot
-from helper.segment import Segment
+from helper.segment import Segment, UseCutPoints
 from helper.transform import Transform
 
 INF = int(1e18)
@@ -27,26 +27,30 @@ class TrajectoryDataset(Dataset):
     def __init__(
         self,
         data_dir: Path,
-        dataframe: pd.DataFrame,
+        info_df: pd.DataFrame,
         min_duration: int = -INF,
         max_duration: int = INF,
-        segment: Segment | None = None,
+        segment: Segment | Path | None = None,
         transform: Transform | None = None,
     ):
+        if isinstance(segment, Path):
+            load_segment = UseCutPoints(segment)
+
         self.transform = transform
 
-        labels = torch.from_numpy(dataframe[PREDICTING_FIELDS].values)
+        labels = torch.from_numpy(info_df[PREDICTING_FIELDS].values)
         metas = labels_to_onehot(labels)
-        # print(metas.shape)
-        # print(metas)
 
         self.samples: list[tuple[torch.Tensor, torch.Tensor]] = []
-        fpaths = [data_dir / f"{id}.txt" for id in dataframe["unique_id"].values]
+        fpaths = [data_dir / f"{id}.txt" for id in sorted(info_df["unique_id"].values)]
         for fpath, meta in tqdm(
             zip(fpaths, metas), desc="Loading Data", total=len(fpaths)
         ):
             data = torch.from_numpy(np.loadtxt(fpath)).float()
-            segs = segment(data) if segment else [data]
+            if isinstance(segment, Path):
+                segs = load_segment(data, int(fpath.stem))
+            else:
+                segs = segment(data) if segment else [data]
             self.samples += [
                 (seg, meta)
                 for seg in segs
@@ -86,7 +90,7 @@ def get_train_valid_dataloader(
     batch_size: int = 32,
     min_duration: int = -INF,
     max_duration: int = INF,
-    segment: Segment | None = None,
+    segment: Segment | Path | None = None,
     train_transform: Transform | None = None,
     valid_transform: Transform | None = None,
 ) -> tuple[DataLoader, DataLoader]:
@@ -110,8 +114,8 @@ def get_train_valid_dataloader(
         The minimum duration of segments to include in the dataset (default is -INF).
     `max_duration`: `int`, optional
         The maximum duration of segments to include in the dataset (default is INF).
-    `segment`: `Segment` | `None`, optional
-        The segmenting method to apply to the data (default is None, which means no segmentation).
+    `segment`: `Segment` | `Path` | `None`, optional
+        The segmenting method or the cut points to apply to the data (default is None, which means no segmentation).
     `train_transform`: `Transform` | `None`, optional
         The transformation to apply to the training data (default is None, which means no transformation).
     `valid_transform`: `Transform` | `None`, optional
@@ -199,18 +203,21 @@ if __name__ == "__main__":
     # Example: Visualize a training sample
     import matplotlib.pyplot as plt
 
-    from config import MEAN, STD, TRAIN_DATA_DIR, TRAIN_INFO
+    from config import BASE_PATH, MEAN, STD, TRAIN_DATA_DIR, TRAIN_INFO
 
     # Use * here just for quick testing
     from helper.segment import *
     from helper.transform import *
+
+    cut_points_csv = BASE_PATH / "helper" / "hmm_cut_points_results.csv"
 
     train_loader, valid_loader = get_train_valid_dataloader(
         TRAIN_DATA_DIR,
         TRAIN_INFO,
         split_target="gender",
         batch_size=1,
-        segment=Yungan(),
+        # segment=Yungan(),
+        segment=cut_points_csv,
         train_transform=Compose(
             [
                 Normalize(mean=MEAN, std=STD),
