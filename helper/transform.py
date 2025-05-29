@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import List
+from typing import List, final, override
 
 import torch
 
@@ -62,3 +62,24 @@ class RandomExtendSegment(Transform):
         extra = int(L * frac)
         new_len = min(L + extra, x.size(0))
         return x[:new_len]
+
+
+@final
+class RandomCrop(Transform):
+    def __init__(self, crop_range: tuple[int, int]):
+        """
+        crop_range: tuple of (min_length, max_length)
+        """
+        super().__init__()
+        self.min_len, self.max_len = crop_range
+
+    @override
+    def __call__(self, x: torch.Tensor) -> torch.Tensor:
+        L = x.size(0)
+        if L < self.min_len:
+            raise ValueError(f"Input length {L} is less than min length {self.min_len}")
+
+        len = random.randint(self.min_len, self.max_len)
+        start = random.randint(0, L - len)
+        end = start + len
+        return x[start:end]
