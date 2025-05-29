@@ -19,7 +19,7 @@ def labels_to_onehot(labels: torch.Tensor) -> torch.Tensor:
 _FIELD_LENS = [len(pv) for pv in POSSIBLE_VALUES]
 
 
-def softmax(x: torch.Tensor, t: float) -> torch.Tensor:
+def softmax(x: torch.Tensor, t: float = 1) -> torch.Tensor:
     ndim = x.ndim
     if ndim == 1:
         x = x.unsqueeze(0)
