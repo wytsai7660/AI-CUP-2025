@@ -1,7 +1,7 @@
 import torch
 from sklearn.preprocessing import OneHotEncoder
 
-from config import POSSIBLE_VALUES
+from config import FIELD_LENS, POSSIBLE_VALUES
 
 _ENCODER = OneHotEncoder(categories=POSSIBLE_VALUES, sparse_output=False)
 _ENCODER.fit(torch.tensor([[2, 2, 2, 2]]))
@@ -16,14 +16,11 @@ def labels_to_onehot(labels: torch.Tensor) -> torch.Tensor:
     return onehot
 
 
-_FIELD_LENS = [len(pv) for pv in POSSIBLE_VALUES]
-
-
 def softmax(x: torch.Tensor, t: float = 1) -> torch.Tensor:
     ndim = x.ndim
     if ndim == 1:
         x = x.unsqueeze(0)
-    values = torch.split(x, _FIELD_LENS, dim=-1)
+    values = torch.split(x, FIELD_LENS, dim=-1)
     result = torch.cat([torch.softmax(value / t, dim=-1) for value in values], dim=-1)
     return result.squeeze(0) if ndim == 1 else result
 
@@ -45,7 +42,7 @@ if __name__ == "__main__":
     all_rows_true = all(
         all(
             isclose(p.sum().item(), 1.0, rel_tol=1e-6)
-            for p in torch.split(pp, _FIELD_LENS, dim=-1)
+            for p in torch.split(pp, FIELD_LENS, dim=-1)
         )
         for pp in ppp
     )

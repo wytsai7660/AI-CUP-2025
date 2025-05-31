@@ -36,6 +36,9 @@ POSSIBLE_VALUES = [
     [2, 3, 4, 5],
 ]
 
+
+FIELD_LENS = [len(pv) for pv in POSSIBLE_VALUES]
+
 NUM_WORKERS = 4
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
