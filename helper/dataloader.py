@@ -35,7 +35,8 @@ class TrajectoryDataset(Dataset):
     ):
         if isinstance(segment, Path):
             load_segment = UseCutPoints(segment)
-
+        self.min_duration = min_duration
+        self.max_duration = max_duration
         self.transform = transform
 
         labels = torch.from_numpy(info_df[PREDICTING_FIELDS].values)
@@ -51,11 +52,7 @@ class TrajectoryDataset(Dataset):
                 segs = load_segment(data, int(fpath.stem))
             else:
                 segs = segment(data) if segment else [data]
-            self.samples += [
-                (seg, meta)
-                for seg in segs
-                if min_duration <= seg.shape[0] <= max_duration
-            ]
+            self.samples += [(seg, meta) for seg in segs]
 
     def __len__(self):
         return len(self.samples)
@@ -64,7 +61,11 @@ class TrajectoryDataset(Dataset):
     def __getitem__(self, idx: int):
         item = self.samples[idx]
         if self.transform:
-            return (self.transform(item[0]), item[1])
+            item = (self.transform(item[0]), item[1])
+
+        if not (self.min_duration <= item[0].size(0) <= self.max_duration):
+            item = (item[0][: self.max_duration, :], item[1])
+
         return item
 
 
