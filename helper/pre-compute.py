@@ -7,7 +7,7 @@ from typing import Tuple
 import pandas as pd
 import torch
 
-from config import TRAIN_DATA_DIR
+from config import PREDICTING_FIELDS, TRAIN_DATA_DIR, TRAIN_INFO
 from helper.segment import Trim
 
 
@@ -34,6 +34,17 @@ def compute_mean_std(data_dir: Path) -> Tuple[torch.Tensor, torch.Tensor]:
     return mean, std
 
 
+def count(info_csv: Path):
+    """
+    Count the number of segments in the dataset.
+    """
+    df = pd.read_csv(info_csv)
+    df.value_counts()
+    for field in PREDICTING_FIELDS:
+        print(df[field].value_counts().sort_index().values)
+
+
 mean, std = compute_mean_std(TRAIN_DATA_DIR)
 print(f"mean: {mean}")
 print(f"std : {std}")
+count(TRAIN_INFO)
