@@ -80,7 +80,6 @@ class RandomCrop(Transform):
             raise ValueError(f"Input length {L} is less than min length {self.min_len}")
 
         len = random.randint(self.min_len, min(self.max_len, L))
-        print(0, L - len)
         start = random.randint(0, L - len)
         end = start + len
         return x[start:end]
