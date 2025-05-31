@@ -8,7 +8,7 @@ from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 
-from config import MEAN, NUM_WORKERS, PREDICTING_FIELDS, SEED
+from config import MEAN, NUM_WORKERS, PREDICTING_FIELDS, SEED, FIELD_LENS
 from helper.functions import labels_to_onehot
 from helper.segment import Segment, UseCutPoints
 from helper.transform import Transform
@@ -81,6 +81,7 @@ def collate_fn_torch(batch: list[tuple[torch.Tensor, torch.Tensor]]):
     lengths = torch.tensor([s.size(0) for s in segments], dtype=torch.long)
     padded = torch.nn.utils.rnn.pad_sequence(segments, batch_first=True)  # type: ignore
     metas = torch.stack(metas, dim=0)
+    metas = torch.split(metas, FIELD_LENS, dim=-1)
     return padded, lengths, metas
 
 
