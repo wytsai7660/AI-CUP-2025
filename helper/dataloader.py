@@ -87,7 +87,7 @@ def collate_fn_torch(batch: list[tuple[torch.Tensor, torch.Tensor]]):
 def get_train_valid_dataloader(
     data_dir: Path,
     info_csv: Path,
-    split_target: str = "gender",
+    split_target: str | None = None,
     batch_size: int = 32,
     min_duration: int = -INF,
     max_duration: int = INF,
@@ -104,8 +104,8 @@ def get_train_valid_dataloader(
         The directory containing the data files.
     `info_csv`: `Path`
         Path to the CSV file containing metadata and labels for the dataset.
-    `split_target`: `str`, optional
-        The column name in the CSV to use for stratified splitting, can be one of the fields in `PREDICTING_FIELDS` (default is "gender").
+    `split_target`: `str` | `None`, optional
+        The column name in the CSV to use for stratified splitting, can be one of the fields in `PREDICTING_FIELDS` (default is None, which means no stratified splitting).
     `batch_size`: `int`, optional
         The batch size to use for the DataLoaders (default is 32).
 
@@ -141,7 +141,7 @@ def get_train_valid_dataloader(
         unique_player["player_id"].to_numpy(),
         test_size=0.2,
         random_state=SEED,
-        stratify=unique_player[split_target].to_numpy(),
+        stratify=unique_player[split_target].to_numpy() if split_target else None,
     )
 
     # from collections import defaultdict
